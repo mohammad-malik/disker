@@ -55,13 +55,43 @@ struct ContentView: View {
     @ViewBuilder
     private var detail: some View {
         VStack(spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                chartPanel
-                InspectorView(model: model)
+            if let error = model.lastError {
+                errorBanner(error)
             }
+
+            switch model.section {
+            case .overview:
+                HStack(alignment: .top, spacing: 14) {
+                    chartPanel
+                    InspectorView(model: model)
+                }
+            case .recommendations:
+                RecommendationsPanel(model: model)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .glassPanel()
+            }
+
             RecommendationBar(model: model)
         }
         .padding(14)
+        .sheet(isPresented: $model.showingAccessSheet) {
+            FullDiskAccessSheet(model: model)
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.callout)
+                .lineLimit(2)
+            Spacer()
+            Button("Dismiss") { model.lastError = nil }
+                .buttonStyle(.borderless)
+        }
+        .padding(12)
+        .glassPanel(cornerRadius: 11)
     }
 
     @ViewBuilder

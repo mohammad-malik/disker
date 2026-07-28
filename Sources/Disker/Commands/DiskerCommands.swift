@@ -11,6 +11,29 @@ struct DiskerCommands: Commands {
         // Disker has no documents, so the stock New/Open items would be dead weight.
         CommandGroup(replacing: .newItem) {}
 
+        // Driven explicitly off the model's UndoManager. SwiftUI's default Undo item follows
+        // the responder chain, which never reaches a deletion performed by the model, so
+        // Cmd+Z would appear present but do nothing.
+        CommandGroup(replacing: .undoRedo) {
+            Button(
+                model.undoManager.canUndo
+                    ? "Undo \(model.undoManager.undoActionName)" : "Undo"
+            ) {
+                model.undoManager.undo()
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(!model.undoManager.canUndo)
+
+            Button(
+                model.undoManager.canRedo
+                    ? "Redo \(model.undoManager.redoActionName)" : "Redo"
+            ) {
+                model.undoManager.redo()
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!model.undoManager.canRedo)
+        }
+
         CommandMenu("Scan") {
             Button("Re-scan Volume") {
                 Task {

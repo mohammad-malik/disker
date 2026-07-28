@@ -77,6 +77,25 @@ case "scan":
         print("  unreadable  \(result.inaccessibleCount) directories — total is a lower bound")
     }
 
+case "recommend":
+    let path = arguments.count >= 3 ? arguments[2] : NSHomeDirectory()
+    let result = try await VolumeScanner().scan(path: path)
+    let recommendations = RecommendationEngine.analyze(result: result)
+
+    var lastTier: Recommendation.Tier?
+    var total: UInt64 = 0
+    for item in recommendations.prefix(30) {
+        if item.tier != lastTier {
+            print("\n\(item.tier.label)")
+            lastTier = item.tier
+        }
+        print("  \(formatBytes(item.size).padded(to: 10))  \(item.title)")
+        print("  \(String(repeating: " ", count: 12))\(item.displayPath)")
+        total &+= item.size
+    }
+    print("\n  \(recommendations.count) suggestions, \(formatBytes(total)) shown")
+    print("  full disk access: \(FullDiskAccess.isGranted ? "granted" : "NOT granted")")
+
 case "mole":
     let client = MoleClient()
     guard let path = client.locateBinary() else {

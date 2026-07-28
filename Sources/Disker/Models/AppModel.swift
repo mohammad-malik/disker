@@ -14,6 +14,20 @@ final class AppModel {
         case failed(String)
     }
 
+    enum Section: String, Hashable, CaseIterable, Identifiable {
+        case overview = "Storage Overview"
+        case recommendations = "Recommendations"
+
+        var id: String { rawValue }
+        var symbolName: String {
+            switch self {
+            case .overview: return "chart.pie.fill"
+            case .recommendations: return "sparkles"
+            }
+        }
+    }
+
+    var section: Section = .overview
     var scanState: ScanState = .idle
     var volume: VolumeInfo?
     var moleReport: MoleReport?
@@ -26,6 +40,16 @@ final class AppModel {
 
     var hoveredSegment: SunburstSegment?
     var selectedSegment: SunburstSegment?
+
+    var recommendations: [Recommendation] = []
+    var hasFullDiskAccess = true
+    var showingAccessSheet = false
+    /// Surfaced inline rather than as a modal alert — a failed delete is information,
+    /// not a decision the user has to stop and make.
+    var lastError: String?
+
+    /// Drives Cmd+Z. Held here rather than on a view so undo survives selection changes.
+    let undoManager = UndoManager()
 
     private let scanner = VolumeScanner()
     private let mole = MoleClient()
@@ -58,9 +82,53 @@ final class AppModel {
             scanState = .loaded(result)
             drillPath = [result.root]
             rebuildSegments()
+            recommendations = RecommendationEngine.analyze(result: result)
+
+            // Only raise the access prompt when it would actually change the numbers:
+            // unreadable folders are the observable symptom, so a scan that hit none has
+            // nothing to complain about even if the grant is technically missing.
+            hasFullDiskAccess = FullDiskAccess.isGranted
+            if !hasFullDiskAccess, result.inaccessibleCount > 0 {
+                showingAccessSheet = true
+            }
         } catch {
             scanState = .failed(error.localizedDescription)
         }
+    }
+
+    var reclaimableSafely: UInt64 {
+        recommendations.filter { $0.tier == .safe }.reduce(0) { $0 &+ $1.size }
+    }
+
+    /// Moves a suggestion's target to the Trash and registers the inverse with the
+    /// UndoManager, so Cmd+Z puts it straight back.
+    func trash(_ recommendation: Recommendation) {
+        let (trashed, failures) = TrashService.moveToTrash(paths: [recommendation.path])
+
+        if let first = failures.first {
+            lastError = first.localizedDescription
+            return
+        }
+        guard !trashed.isEmpty else { return }
+
+        recommendations.removeAll { $0.id == recommendation.id }
+
+        undoManager.registerUndo(withTarget: self) { model in
+            let restoreFailures = TrashService.restore(trashed)
+            if let failure = restoreFailures.first {
+                model.lastError = failure.localizedDescription
+            } else {
+                model.recommendations.append(recommendation)
+                model.recommendations.sort {
+                    $0.tier == $1.tier ? $0.size > $1.size : $0.tier < $1.tier
+                }
+            }
+        }
+        undoManager.setActionName("Move \(recommendation.title) to Trash")
+    }
+
+    func openFullDiskAccessSettings() {
+        NSWorkspace.shared.open(FullDiskAccess.settingsURL)
     }
 
     func rebuildSegments() {

@@ -6,10 +6,15 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            List {
+            List(selection: $model.section) {
                 Section {
-                    Label("Storage Overview", systemImage: "chart.pie.fill")
-                    Label("Recommendations", systemImage: "sparkles")
+                    ForEach(AppModel.Section.allCases) { item in
+                        Label(item.rawValue, systemImage: item.symbolName)
+                            .tag(item)
+                            .badge(
+                                item == .recommendations && model.reclaimableSafely > 0
+                                    ? model.reclaimableSafely.formattedBytes : nil)
+                    }
                 }
 
                 Section("Locations") {
