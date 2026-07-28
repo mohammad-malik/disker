@@ -129,6 +129,7 @@ struct InspectorView: View {
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
+            .buttonStyle(.glass)
         }
     }
 }

@@ -65,7 +65,7 @@ struct RecommendationBar: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
-            .glassPanel(cornerRadius: 11)
+            .interactiveGlass(cornerRadius: 11)
             .help(category.items.prefix(6).map(\.name).joined(separator: "\n"))
         }
     }
@@ -78,7 +78,9 @@ struct RecommendationBar: View {
                 .padding(.horizontal, 6)
         }
         .controlSize(.large)
-        .buttonStyle(.borderedProminent)
+        // The system's own glass button, rather than a tinted rectangle. It picks up the
+        // same lensing as the panels, so the primary action belongs to the surface it sits on.
+        .buttonStyle(.glassProminent)
         .disabled(model.moleReport == nil)
         .help("Opens Mole in Terminal, where you can review each step and authorise sudo.")
         .accessibilityLabel("Clean with Mole, opens Terminal")
