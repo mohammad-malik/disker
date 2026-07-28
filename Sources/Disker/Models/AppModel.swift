@@ -65,8 +65,27 @@ final class AppModel {
 
     var segments: [SunburstSegment] = []
 
+    /// Age of the displayed scan, when it came from cache rather than a fresh walk.
+    var cachedAt: Date?
+
     func refreshVolume() {
         volume = VolumeInfo.current(for: scanRoot)
+    }
+
+    /// Shows the previous scan immediately if there is one.
+    ///
+    /// Returns whether anything was restored, so the caller can decide to scan instead of
+    /// making the user watch a spinner for numbers that have barely changed since yesterday.
+    @discardableResult
+    func loadCachedScan() -> Bool {
+        guard let entry = ScanCache.load(expecting: scanRoot) else { return false }
+        let result = entry.result
+        scanState = .loaded(result)
+        drillPath = [result.root]
+        cachedAt = entry.scannedAt
+        rebuildSegments()
+        recommendations = RecommendationEngine.analyze(result: result)
+        return true
     }
 
     func scan() async {
@@ -81,8 +100,10 @@ final class AppModel {
             }
             scanState = .loaded(result)
             drillPath = [result.root]
+            cachedAt = nil
             rebuildSegments()
             recommendations = RecommendationEngine.analyze(result: result)
+            ScanCache.save(result)
 
             // Only raise the access prompt when it would actually change the numbers:
             // unreadable folders are the observable symptom, so a scan that hit none has

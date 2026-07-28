@@ -182,7 +182,10 @@ struct SunburstView: View {
         }
         .padding(radius * 0.18)
         .frame(width: radius * 2, height: radius * 2)
-        .glassPanel(cornerRadius: radius)
+        // Clear rather than regular: the hub sits inside the chart, and a frosted disc there
+        // reads as a hole punched in the middle of the data. Clear glass keeps it as a lens
+        // over the same surface.
+        .glassPanel(cornerRadius: radius, glass: .clear)
         .contentShape(.circle)
         .onTapGesture {
             // Clicking the hub steps back out, mirroring the drill-in gesture.

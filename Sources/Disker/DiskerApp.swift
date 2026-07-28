@@ -38,33 +38,58 @@ struct ContentView: View {
         // opaque slab that made glass render flat; the backdrop then gives it something
         // to refract, so panels read as material rather than as holes.
         .transparentWindowBackground(enabled: !reduceTransparency)
-        .background {
-            if !reduceTransparency {
-                ZStack {
-                    // Frosted desktop, then Disker's own light on top of it. The panels
-                    // refract the combination, so they read as glass over a dark terminal
-                    // just as well as over a bright wallpaper.
-                    VisualEffectBackdrop(material: .hudWindow)
-                    AuroraBackdrop()
-                }
-                .ignoresSafeArea()
+        // Must be `containerBackground`, not `.background`. NavigationSplitView draws its
+        // own opaque sidebar and detail panes, which sit above any ordinary background
+        // modifier and hid the backdrop entirely — the window stayed flat grey.
+        // containerBackground installs beneath that chrome.
+        // Must be `containerBackground`, not `.background`. NavigationSplitView draws its
+        // own opaque panes above any ordinary background modifier, which hid this entirely.
+        //
+        // Neutral, uncoloured frost. An earlier version painted coloured light pools here to
+        // guarantee the glass had something vivid to refract; it read as a rainbow gradient,
+        // which is the opposite of what this material is. Glass should show what is actually
+        // behind the window, even when that is something plain.
+        //
+        // Two extremes were wrong. `.underWindowBackground` frosted the whole window before
+        // the panels could sample it, so they refracted a grey slab rather than the screen.
+        // Fully clear went the other way: real refraction, but the desktop read straight
+        // through the panels and the terminal behind became legible under the numbers.
+        //
+        // `.sidebar` is the middle — translucent enough that the glass has genuine depth to
+        // lens, opaque enough that dense figures stay readable over whatever is behind.
+        .containerBackground(for: .window) {
+            if reduceTransparency {
+                Color(nsColor: .windowBackgroundColor)
+            } else {
+                VisualEffectBackdrop(material: .sidebar)
             }
         }
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .task {
-            // Kick off automatically: an empty window with a "Scan" button asks the user to
-            // confirm the one thing they opened the app to do.
             model.refreshVolume()
-            await model.scan()
+            // Show the previous scan instantly when there is one. Only walk the disk when
+            // there is nothing to show — an empty window with a "Scan" button asks the user
+            // to confirm the one thing they opened the app to do, but a three-minute spinner
+            // over numbers that barely moved since yesterday is no better.
+            if !model.loadCachedScan() {
+                await model.scan()
+            }
             await model.loadMoleReport()
         }
     }
 
     private var subtitle: String {
         switch model.scanState {
-        case .loaded(let result): return "\(result.root.size.formattedBytes) analyzed"
+        case .loaded(let result):
+            // Say when the figure is stale rather than presenting cached numbers as live.
+            if let cachedAt = model.cachedAt {
+                let age = RelativeDateTimeFormatter()
+                age.unitsStyle = .abbreviated
+                return "\(result.root.size.formattedBytes) · scanned \(age.localizedString(for: cachedAt, relativeTo: Date()))"
+            }
+            return "\(result.root.size.formattedBytes) analyzed"
         case .scanning(let progress):
             return progress.map { "\($0.filesScanned.formatted()) files…" } ?? "Scanning…"
         case .failed: return "Scan failed"
@@ -74,24 +99,30 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detail: some View {
-        VStack(spacing: 14) {
-            if let error = model.lastError {
-                errorBanner(error)
-            }
-
-            switch model.section {
-            case .overview:
-                HStack(alignment: .top, spacing: 14) {
-                    chartPanel
-                    InspectorView(model: model)
+        // GlassEffectContainer is what makes these panels behave as one material rather than
+        // three independent blurs: it shares a single sampling pass, so nearby glass shapes
+        // blend and their edges respond to each other instead of stacking into muddy grey.
+        // Omitting it was why the panels read as flat cards.
+        GlassEffectContainer(spacing: 14) {
+            VStack(spacing: 14) {
+                if let error = model.lastError {
+                    errorBanner(error)
                 }
-            case .recommendations:
-                RecommendationsPanel(model: model)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .glassPanel()
-            }
 
-            RecommendationBar(model: model)
+                switch model.section {
+                case .overview:
+                    HStack(alignment: .top, spacing: 14) {
+                        chartPanel
+                        InspectorView(model: model)
+                    }
+                case .recommendations:
+                    RecommendationsPanel(model: model)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .glassPanel()
+                }
+
+                RecommendationBar(model: model)
+            }
         }
         .padding(14)
         .sheet(isPresented: $model.showingAccessSheet) {

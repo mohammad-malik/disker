@@ -9,7 +9,7 @@ import Foundation
 /// Deliberately carries no parent pointer. Breadcrumbs come from the drill-down stack the
 /// UI already maintains, so the tree stays a clean value-semantics structure and we avoid
 /// a retain cycle or an `unowned` field that would defeat `Sendable`.
-public final class FileNode: Sendable {
+public final class FileNode: Sendable, Codable {
     /// Leaf name only. Full paths are reconstructed by joining the drill-down stack —
     /// storing an absolute path per node would cost hundreds of MB on a full volume scan.
     public let name: String
@@ -36,7 +36,7 @@ public final class FileNode: Sendable {
     /// Unreliable on `noatime` volumes — callers must treat `nil` as "unknown", never "old".
     public let accessTime: Date?
 
-    public enum Kind: UInt8, Sendable {
+    public enum Kind: UInt8, Sendable, Codable {
         case file
         case directory
         case symlink
@@ -44,7 +44,7 @@ public final class FileNode: Sendable {
         case aggregate
     }
 
-    public struct Flags: OptionSet, Sendable {
+    public struct Flags: OptionSet, Sendable, Codable {
         public let rawValue: UInt8
         public init(rawValue: UInt8) { self.rawValue = rawValue }
 
