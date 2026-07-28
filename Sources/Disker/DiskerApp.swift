@@ -22,14 +22,19 @@ struct DiskerApp: App {
 struct ContentView: View {
     @Bindable var model: AppModel
     @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+                // The sidebar's own material would otherwise paint over the transparent
+                // window and reintroduce the flat background glass needs to avoid.
+                .toolbarBackground(.hidden, for: .windowToolbar)
         } detail: {
             detail
         }
+        .transparentWindowBackground(enabled: !reduceTransparency)
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }

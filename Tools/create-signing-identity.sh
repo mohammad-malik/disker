@@ -42,15 +42,39 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
     -keyout "$WORK_DIR/key.pem" \
     -out "$WORK_DIR/cert.pem" 2>/dev/null
 
-openssl pkcs12 -export -inkey "$WORK_DIR/key.pem" -in "$WORK_DIR/cert.pem" \
-    -out "$WORK_DIR/identity.p12" -passout pass: 2>/dev/null
+# OpenSSL 3 defaults to AES-256-CBC with a SHA-256 MAC, which macOS's Security framework
+# cannot import ("MAC verification failed"). The legacy PBE algorithms below are what
+# `security import` understands. An empty password also fails MAC verification, so the
+# bundle carries a throwaway one — it never leaves this function.
+P12_PASSWORD="disker-transient"
+openssl pkcs12 -export -legacy \
+    -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1 \
+    -inkey "$WORK_DIR/key.pem" -in "$WORK_DIR/cert.pem" \
+    -out "$WORK_DIR/identity.p12" -passout "pass:$P12_PASSWORD" 2>/dev/null
 
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 # -T codesign pre-authorises codesign to use the private key, so builds do not each
 # raise a keychain password prompt.
-security import "$WORK_DIR/identity.p12" -k "$KEYCHAIN" -P "" \
+security import "$WORK_DIR/identity.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" \
     -T /usr/bin/codesign -T /usr/bin/security
+
+# Importing alone is not enough. codesign only accepts identities it trusts, and a
+# freshly imported self-signed certificate is not trusted by default — `security
+# find-identity -v -p codesigning` reports "0 valid identities" and signing fails with
+# the distinctly unhelpful `errSecInternalComponent`. Marking it as a trusted root for
+# code signing (user-level only, no sudo) is what makes it usable.
+security add-trusted-cert -r trustRoot -p codeSign -k "$KEYCHAIN" "$WORK_DIR/cert.pem"
+
+if security find-identity -v -p codesigning | grep -q "$SIGNING_IDENTITY"; then
+    echo
+    echo "Verified: '$SIGNING_IDENTITY' is a valid code-signing identity."
+else
+    echo
+    echo "WARNING: the certificate imported but is not showing as a valid signing identity."
+    echo "Builds will fall back to ad-hoc signing."
+    exit 1
+fi
 
 echo
 echo "Created signing identity '$SIGNING_IDENTITY'."
