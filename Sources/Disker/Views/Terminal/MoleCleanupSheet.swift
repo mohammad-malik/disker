@@ -80,7 +80,11 @@ struct MoleCleanupSheet: View {
             footer
         }
         .frame(width: 860, height: 620)
-        .background(.black.opacity(0.86))
+        // Opaque, and pinned to the dark appearance. A terminal is dark in both themes, so
+        // the surrounding labels and buttons have to be the dark-appearance variants or they
+        // turn black-on-black when the app is in light mode.
+        .background(Color(white: 0.06))
+        .environment(\.colorScheme, .dark)
         .task {
             // Opens straight into a preview so the user sees what would be removed before
             // anything is. Guarded because .task re-runs on some view identity changes.

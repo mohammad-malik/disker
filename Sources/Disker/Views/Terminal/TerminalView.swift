@@ -31,7 +31,10 @@ struct TerminalScreenView: View {
         func flush() {
             guard !run.isEmpty, let style = runStyle else { return }
             var piece = AttributedString(run)
-            piece.foregroundColor = color(for: style.foreground) ?? .primary
+            // Explicitly light, never `.primary`. A terminal keeps its dark background in
+            // both appearances, so a semantic colour would resolve to black in light mode
+            // and render the output invisible against it.
+            piece.foregroundColor = color(for: style.foreground) ?? Color(white: 0.92)
             if let background = style.background, let colour = color(for: background) {
                 piece.backgroundColor = colour
             }
