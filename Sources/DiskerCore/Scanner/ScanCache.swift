@@ -10,6 +10,10 @@ import Foundation
 /// Deliberately not auto-refreshed on launch: silently re-walking two million files in the
 /// background is exactly the kind of thing that makes a disk utility itself the reason the
 /// fans are running.
+///
+/// The storage directory is injectable so tests exercise a temporary one. The first version
+/// hard-coded Application Support, which meant running the suite deleted the user's real
+/// cached scan — a test that destroys production data is a bug regardless of whether it passes.
 public struct ScanCache: Sendable {
 
     public struct Entry: Codable, Sendable {
@@ -27,20 +31,26 @@ public struct ScanCache: Sendable {
         }
     }
 
-    private static var directory: URL? {
-        FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first?
-            .appendingPathComponent("Disker", isDirectory: true)
+    private let directory: URL?
+
+    public init(directory: URL?) {
+        self.directory = directory
     }
 
-    private static var fileURL: URL? {
+    /// The cache the app uses, under Application Support.
+    public static let shared = ScanCache(
+        directory: FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("Disker", isDirectory: true))
+
+    private var fileURL: URL? {
         directory?.appendingPathComponent("last-scan.plist")
     }
 
     /// Binary property list rather than JSON: the retained tree runs to a few hundred
     /// thousand nodes, and a text format spends most of the time on string escaping.
-    public static func save(_ result: ScanResult) {
+    public func save(_ result: ScanResult) {
         guard let directory, let fileURL else { return }
         let entry = Entry(
             root: result.root,
@@ -61,10 +71,11 @@ public struct ScanCache: Sendable {
         }
     }
 
-    public static func load(expecting rootPath: String) -> Entry? {
+    public func load(expecting rootPath: String) -> Entry? {
         guard let fileURL, let data = try? Data(contentsOf: fileURL) else { return nil }
         guard let entry = try? PropertyListDecoder().decode(Entry.self, from: data) else {
-            // Most likely a tree written by an older build. Drop it rather than fail.
+            // Most likely a tree written by an older build. Drop it rather than fail, so a
+            // stale file cannot break every future launch.
             try? FileManager.default.removeItem(at: fileURL)
             return nil
         }
@@ -72,8 +83,11 @@ public struct ScanCache: Sendable {
         return entry.rootPath == rootPath ? entry : nil
     }
 
-    public static func clear() {
+    public func clear() {
         guard let fileURL else { return }
         try? FileManager.default.removeItem(at: fileURL)
     }
+
+    /// Path of the backing file, for tests that need to corrupt it deliberately.
+    public var storageURL: URL? { fileURL }
 }

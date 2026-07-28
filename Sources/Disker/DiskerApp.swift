@@ -57,11 +57,13 @@ struct ContentView: View {
         //
         // `.sidebar` is the middle — translucent enough that the glass has genuine depth to
         // lens, opaque enough that dense figures stay readable over whatever is behind.
+        // `isEmphasized` keeps it at full strength even when the window is not key, so the
+        // material does not visibly deaden every time focus moves elsewhere.
         .containerBackground(for: .window) {
             if reduceTransparency {
                 Color(nsColor: .windowBackgroundColor)
             } else {
-                VisualEffectBackdrop(material: .sidebar)
+                VisualEffectBackdrop(material: .sidebar, isEmphasized: true)
             }
         }
         .navigationTitle(model.volume?.name ?? "Disker")

@@ -78,7 +78,7 @@ final class AppModel {
     /// making the user watch a spinner for numbers that have barely changed since yesterday.
     @discardableResult
     func loadCachedScan() -> Bool {
-        guard let entry = ScanCache.load(expecting: scanRoot) else { return false }
+        guard let entry = ScanCache.shared.load(expecting: scanRoot) else { return false }
         let result = entry.result
         scanState = .loaded(result)
         drillPath = [result.root]
@@ -103,7 +103,7 @@ final class AppModel {
             cachedAt = nil
             rebuildSegments()
             recommendations = RecommendationEngine.analyze(result: result)
-            ScanCache.save(result)
+            ScanCache.shared.save(result)
 
             // Only raise the access prompt when it would actually change the numbers:
             // unreadable folders are the observable symptom, so a scan that hit none has

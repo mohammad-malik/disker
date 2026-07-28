@@ -48,9 +48,26 @@ extension Color {
 /// like glass should come from the material, not from a gradient.
 struct GlassPanel: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var colorScheme
 
     var cornerRadius: CGFloat = 16
-    var glass: Glass = .regular
+    /// When nil, the panel uses the standard lifted glass. Pass a value to override entirely.
+    var glass: Glass?
+
+    /// A faint white tint mixed into the material.
+    ///
+    /// Glass shows what is behind it, and behind this window is usually a dark editor or
+    /// terminal — so untinted panels go nearly black and the material's character disappears
+    /// exactly when it should be most visible. Lifting the tint keeps the surface reading as
+    /// glass over a dark backdrop without resorting to a coloured wash behind the window.
+    var lift: Double = 0.10
+
+    private var resolvedGlass: Glass {
+        if let glass { return glass }
+        // Dark backdrops need more help than light ones, which already have plenty to lens.
+        let amount = colorScheme == .dark ? lift : lift * 0.4
+        return Glass.regular.tint(.white.opacity(amount))
+    }
 
     func body(content: Content) -> some View {
         if reduceTransparency {
@@ -61,16 +78,26 @@ struct GlassPanel: ViewModifier {
                         .strokeBorder(.separator, lineWidth: 1))
         } else {
             content
-                .glassEffect(glass, in: .rect(cornerRadius: cornerRadius))
-                // Elevation only. The material supplies its own edge treatment.
-                .shadow(color: .black.opacity(0.22), radius: 16, y: 6)
+                .glassEffect(resolvedGlass, in: .rect(cornerRadius: cornerRadius))
+                // A single hairline, uniform weight. Not the multi-stop fake specular this
+                // replaced — just enough to define where the pane ends, which the material
+                // alone does not do convincingly against a dark background.
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .strokeBorder(
+                            .white.opacity(colorScheme == .dark ? 0.16 : 0.30),
+                            lineWidth: 0.5)
+                        .allowsHitTesting(false))
+                .shadow(color: .black.opacity(0.24), radius: 16, y: 6)
         }
     }
 }
 
 extension View {
-    func glassPanel(cornerRadius: CGFloat = 16, glass: Glass = .regular) -> some View {
-        modifier(GlassPanel(cornerRadius: cornerRadius, glass: glass))
+    func glassPanel(cornerRadius: CGFloat = 16, glass: Glass? = nil, lift: Double = 0.10)
+        -> some View
+    {
+        modifier(GlassPanel(cornerRadius: cornerRadius, glass: glass, lift: lift))
     }
 
     /// For controls that should respond to pointer proximity the way system glass does.
@@ -78,6 +105,8 @@ extension View {
         modifier(
             GlassPanel(
                 cornerRadius: cornerRadius,
-                glass: Glass.regular.tint(tint).interactive()))
+                glass: Glass.regular
+                    .tint(tint ?? .white.opacity(0.14))
+                    .interactive()))
     }
 }
