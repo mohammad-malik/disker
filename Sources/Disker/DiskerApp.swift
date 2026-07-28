@@ -34,7 +34,22 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        // Clear window + frosted backdrop, in that order. The clear window removes the
+        // opaque slab that made glass render flat; the backdrop then gives it something
+        // to refract, so panels read as material rather than as holes.
         .transparentWindowBackground(enabled: !reduceTransparency)
+        .background {
+            if !reduceTransparency {
+                ZStack {
+                    // Frosted desktop, then Disker's own light on top of it. The panels
+                    // refract the combination, so they read as glass over a dark terminal
+                    // just as well as over a bright wallpaper.
+                    VisualEffectBackdrop(material: .hudWindow)
+                    AuroraBackdrop()
+                }
+                .ignoresSafeArea()
+            }
+        }
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }

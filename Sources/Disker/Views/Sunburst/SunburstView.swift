@@ -108,13 +108,35 @@ struct SunburstView: View {
         // Depth is conveyed by lightening the category hue, so a subtree stays visually
         // tied to its parent as it moves outward.
         let depthFade = 0.16 * Double(segment.ring)
-        let base = segment.category.color.opacity(highlighted ? 1.0 : 0.85 - depthFade * 0.35)
+        let base = segment.category.color.opacity(highlighted ? 1.0 : 0.88 - depthFade * 0.3)
 
-        context.fill(path, with: .color(base))
-        context.stroke(path, with: .color(.white.opacity(0.22)), lineWidth: 0.75)
+        // Radial gradient rather than a flat fill: brighter on the inner edge, deeper toward
+        // the rim. That is how a curved, slightly translucent surface catches light, and it
+        // keeps adjacent rings distinguishable without adding borders.
+        context.fill(
+            path,
+            with: .radialGradient(
+                Gradient(colors: [
+                    segment.category.color.mixed(with: .white, amount: 0.22)
+                        .opacity(highlighted ? 1.0 : 0.92 - depthFade * 0.3),
+                    base,
+                ]),
+                center: center,
+                startRadius: ringInner,
+                endRadius: ringOuter))
+
+        // Inner highlight along the leading edge of each ring, mimicking light refracting
+        // through the thickness of the band.
+        var innerEdge = Path()
+        innerEdge.addArc(
+            center: center, radius: ringInner + 0.5, startAngle: start, endAngle: end,
+            clockwise: false)
+        context.stroke(innerEdge, with: .color(.white.opacity(0.28)), lineWidth: 1)
+
+        context.stroke(path, with: .color(.black.opacity(0.18)), lineWidth: 0.5)
 
         if highlighted {
-            context.stroke(path, with: .color(.white.opacity(0.9)), lineWidth: 2)
+            context.stroke(path, with: .color(.white.opacity(0.95)), lineWidth: 2)
         }
 
         // Only label wedges with room for a glyph — anything smaller becomes visual noise.
@@ -124,8 +146,19 @@ struct SunburstView: View {
             let point = CGPoint(
                 x: center.x + cos(angle) * midRadius,
                 y: center.y + sin(angle) * midRadius)
+
+            // Frosted badge behind the glyph, as in the design mock. Without it the symbol
+            // competes with the wedge colour and reads as a smudge.
+            let badgeRadius = min(ringWidth * 0.30, 20)
+            let badge = Path(
+                ellipseIn: CGRect(
+                    x: point.x - badgeRadius, y: point.y - badgeRadius,
+                    width: badgeRadius * 2, height: badgeRadius * 2))
+            context.fill(badge, with: .color(.white.opacity(0.28)))
+            context.stroke(badge, with: .color(.white.opacity(0.45)), lineWidth: 1)
+
             var symbol = context.resolve(Image(systemName: segment.category.symbolName))
-            symbol.shading = .color(.white.opacity(0.9))
+            symbol.shading = .color(.white.opacity(0.95))
             context.draw(symbol, at: point)
         }
     }
