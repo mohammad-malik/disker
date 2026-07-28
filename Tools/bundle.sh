@@ -54,22 +54,21 @@ cat >"$APP_DIR/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-# --- Icon -------------------------------------------------------------------
-# No actool, so build the .icns directly. Skipped silently when no source art exists.
-ICON_SRC="Resources/AppIcon.png"
-if [[ -f "$ICON_SRC" ]]; then
-    echo "==> Building icon"
-    ICONSET="$(mktemp -d)/AppIcon.iconset"
-    mkdir -p "$ICONSET"
-    for size in 16 32 128 256 512; do
-        sips -z $size $size "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null 2>&1
-        sips -z $((size * 2)) $((size * 2)) "$ICON_SRC" \
-            --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null 2>&1
-    done
-    iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
-    rm -rf "$(dirname "$ICONSET")"
-else
-    echo "==> No $ICON_SRC — bundling without a custom icon"
+# --- Icons ------------------------------------------------------------------
+# Both variants ship. A bundle can only declare one static icon (used by Finder and the
+# installer), so the light artwork is the declared one and AppearanceController swaps the
+# Dock icon at runtime to match the effective appearance.
+echo "==> Copying icons"
+for variant in Dark Light; do
+    if [[ -f "Resources/AppIcon-$variant.icns" ]]; then
+        cp "Resources/AppIcon-$variant.icns" "$APP_DIR/Contents/Resources/"
+    else
+        echo "    warning: Resources/AppIcon-$variant.icns missing"
+    fi
+done
+# CFBundleIconFile points at this one; keep the name in sync with Info.plist above.
+if [[ -f "Resources/AppIcon-Light.icns" ]]; then
+    cp "Resources/AppIcon-Light.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 fi
 
 # --- Signing ----------------------------------------------------------------

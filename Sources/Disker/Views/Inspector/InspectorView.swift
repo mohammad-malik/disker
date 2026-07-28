@@ -122,14 +122,27 @@ struct InspectorView: View {
     @ViewBuilder
     private var revealButton: some View {
         if let segment = model.selectedSegment ?? model.hoveredSegment {
-            Button {
-                model.revealInFinder(segment)
-            } label: {
-                Label("Show in Finder", systemImage: "folder")
-                    .frame(maxWidth: .infinity)
+            VStack(spacing: 8) {
+                Button {
+                    model.revealInFinder(segment)
+                } label: {
+                    Label("Show in Finder", systemImage: "folder")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.glass)
+
+                Button(role: .destructive) {
+                    model.requestDeletion(of: segment)
+                } label: {
+                    Label("Move to Trash", systemImage: "trash")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .buttonStyle(.glass)
+                .disabled(segment.node.kind == .aggregate)
+                .help("Asks for confirmation first. Undo with ⌘Z.")
             }
-            .controlSize(.large)
-            .buttonStyle(.glass)
         }
     }
 }

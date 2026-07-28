@@ -6,6 +6,7 @@ import SwiftUI
 /// keyboard equivalent — the menu bar is where users look first for a command they cannot find.
 struct DiskerCommands: Commands {
     @Bindable var model: AppModel
+    @Bindable var appearance: AppearanceController
 
     var body: some Commands {
         // Disker has no documents, so the stock New/Open items would be dead weight.
@@ -54,7 +55,6 @@ struct DiskerCommands: Commands {
                 model.launchMoleCleanup()
             }
             .keyboardShortcut("k", modifiers: [.command, .shift])
-            .disabled(model.moleReport == nil)
         }
 
         CommandMenu("Navigate") {
@@ -90,6 +90,14 @@ struct DiskerCommands: Commands {
         }
 
         CommandGroup(after: .toolbar) {
+            Picker("Appearance", selection: $appearance.mode) {
+                ForEach(AppearanceMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+
+            Divider()
+
             Button("Toggle Sidebar") {
                 NSApp.keyWindow?.firstResponder?.tryToPerform(
                     #selector(NSSplitViewController.toggleSidebar(_:)), with: nil)

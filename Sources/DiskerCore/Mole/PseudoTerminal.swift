@@ -1,0 +1,169 @@
+import Darwin
+import Foundation
+
+/// Runs a command attached to a pseudo-terminal.
+///
+/// Mole's `clean` command is a full-screen interactive TUI. Handing it a plain pipe is not
+/// enough: it checks whether stdout is a terminal and, finding a pipe, either disables its
+/// interface or refuses to prompt at all. A pty makes it behave exactly as it would in
+/// Terminal.app — which is the point, since the user needs to see and answer its
+/// confirmations before anything is deleted.
+///
+/// This replaced an AppleScript handoff that told Terminal.app to run the command. That
+/// approach needs Automation permission; without it the call blocks indefinitely and the
+/// user sees a window open and nothing happen.
+public final class PseudoTerminal: @unchecked Sendable {
+
+    public enum State: Sendable, Equatable {
+        case idle
+        case running
+        case finished(exitCode: Int32)
+        case failed(String)
+    }
+
+    private var primaryFD: Int32 = -1
+    private var childPID: pid_t = -1
+    private var readSource: DispatchSourceRead?
+    private let lock = NSLock()
+
+    /// Raw bytes from the child, delivered on the main actor.
+    private let onOutput: @Sendable (Data) -> Void
+    private let onStateChange: @Sendable (State) -> Void
+
+    public init(
+        onOutput: @escaping @Sendable (Data) -> Void,
+        onStateChange: @escaping @Sendable (State) -> Void
+    ) {
+        self.onOutput = onOutput
+        self.onStateChange = onStateChange
+    }
+
+    deinit {
+        readSource?.cancel()
+        if primaryFD >= 0 { close(primaryFD) }
+    }
+
+    /// Forks a child attached to a new pty and starts streaming its output.
+    ///
+    /// - Parameter columns/rows: the child sizes its interface from these, so they must be
+    ///   set before exec rather than left at the 0×0 a fresh pty reports.
+    public func start(
+        executable: String,
+        arguments: [String],
+        environment: [String: String] = [:],
+        columns: UInt16 = 100,
+        rows: UInt16 = 30
+    ) {
+        var size = winsize(ws_row: rows, ws_col: columns, ws_xpixel: 0, ws_ypixel: 0)
+        var primary: Int32 = 0
+
+        let pid = withUnsafeMutablePointer(to: &size) { sizePtr in
+            forkpty(&primary, nil, nil, sizePtr)
+        }
+
+        if pid < 0 {
+            onStateChange(.failed("Could not allocate a pseudo-terminal."))
+            return
+        }
+
+        if pid == 0 {
+            // Child. Only async-signal-safe work belongs here; anything that allocates or
+            // takes a lock can deadlock against state held by the parent at fork time.
+            var env = ProcessInfo.processInfo.environment
+            for (key, value) in environment { env[key] = value }
+            // Declaring a capable terminal keeps colours and cursor addressing switched on.
+            env["TERM"] = "xterm-256color"
+
+            let envStrings = env.map { "\($0.key)=\($0.value)" }
+            var envPointers: [UnsafeMutablePointer<CChar>?] = envStrings.map {
+                strdup($0)
+            }
+            envPointers.append(nil)
+
+            var argPointers: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map {
+                strdup($0)
+            }
+            argPointers.append(nil)
+
+            execve(executable, &argPointers, &envPointers)
+            // Only reached if exec failed; _exit rather than exit to skip atexit handlers
+            // inherited from the parent.
+            _exit(127)
+        }
+
+        // Parent.
+        lock.lock()
+        primaryFD = primary
+        childPID = pid
+        lock.unlock()
+
+        onStateChange(.running)
+        startReading(fd: primary)
+        waitForExit(pid: pid)
+    }
+
+    private func startReading(fd: Int32) {
+        let source = DispatchSource.makeReadSource(
+            fileDescriptor: fd, queue: .global(qos: .userInitiated))
+        source.setEventHandler { [weak self] in
+            guard let self else { return }
+            var buffer = [UInt8](repeating: 0, count: 8192)
+            let count = read(fd, &buffer, buffer.count)
+            // 0 means the child closed the pty; negative is an error. Either way the
+            // stream is done and continuing would spin the event source.
+            guard count > 0 else {
+                self.readSource?.cancel()
+                return
+            }
+            self.onOutput(Data(buffer[0..<count]))
+        }
+        source.resume()
+        readSource = source
+    }
+
+    private func waitForExit(pid: pid_t) {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
+            // Decode wait status: low byte carries the signal, second byte the exit code.
+            let exitCode = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : status & 0x7F
+            self?.onStateChange(.finished(exitCode: exitCode))
+        }
+    }
+
+    /// Sends keystrokes to the child.
+    public func send(_ text: String) {
+        lock.lock()
+        let fd = primaryFD
+        lock.unlock()
+        guard fd >= 0, let data = text.data(using: .utf8) else { return }
+        _ = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+    }
+
+    /// Tells the child its window changed, so a TUI can re-lay out.
+    public func resize(columns: UInt16, rows: UInt16) {
+        lock.lock()
+        let fd = primaryFD
+        lock.unlock()
+        guard fd >= 0 else { return }
+        var size = winsize(ws_row: rows, ws_col: columns, ws_xpixel: 0, ws_ypixel: 0)
+        _ = withUnsafeMutablePointer(to: &size) { ioctl(fd, TIOCSWINSZ, $0) }
+    }
+
+    /// Interrupts the child, as Ctrl-C would.
+    public func interrupt() {
+        lock.lock()
+        let pid = childPID
+        lock.unlock()
+        guard pid > 0 else { return }
+        kill(pid, SIGINT)
+    }
+
+    public func terminate() {
+        lock.lock()
+        let pid = childPID
+        lock.unlock()
+        readSource?.cancel()
+        if pid > 0 { kill(pid, SIGTERM) }
+    }
+}

@@ -4,23 +4,26 @@ import SwiftUI
 @main
 struct DiskerApp: App {
     @State private var model = AppModel()
+    @State private var appearance = AppearanceController()
 
     var body: some Scene {
         WindowGroup {
-            ContentView(model: model)
+            ContentView(model: model, appearance: appearance)
                 .frame(minWidth: 940, minHeight: 620)
+                .task { appearance.start() }
         }
         .defaultSize(width: 1360, height: 880)
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)
-        .commands { DiskerCommands(model: model) }
+        .commands { DiskerCommands(model: model, appearance: appearance) }
 
-        Settings { SettingsView(model: model) }
+        Settings { SettingsView(model: model, appearance: appearance) }
     }
 }
 
 struct ContentView: View {
     @Bindable var model: AppModel
+    @Bindable var appearance: AppearanceController
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -70,6 +73,7 @@ struct ContentView: View {
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .task {
+            model.refreshVolumes()
             model.refreshVolume()
             // Show the previous scan instantly when there is one. Only walk the disk when
             // there is nothing to show — an empty window with a "Scan" button asks the user
@@ -79,6 +83,24 @@ struct ContentView: View {
                 await model.scan()
             }
             await model.loadMoleReport()
+        }
+        .sheet(isPresented: $model.showingMoleSheet) {
+            MoleCleanupSheet(model: model)
+        }
+        .confirmationDialog(
+            "Move to Trash?",
+            isPresented: .init(
+                get: { model.pendingDeletion != nil },
+                set: { if !$0 { model.pendingDeletion = nil } })
+        ) {
+            Button("Move to Trash", role: .destructive) { model.confirmDeletion() }
+            Button("Cancel", role: .cancel) { model.pendingDeletion = nil }
+        } message: {
+            if let pending = model.pendingDeletion {
+                Text(
+                    "\(pending.name) — \(pending.size.formattedBytes)\n\(pending.path)\n\n"
+                        + "It goes to the Trash, so you can put it back with ⌘Z or from Finder.")
+            }
         }
     }
 
@@ -207,6 +229,34 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            // The disk picker from the design mock. Always present, even with one disk:
+            // it names what you are looking at, which the window title alone stops doing
+            // as soon as an external drive is plugged in.
+            Menu {
+                ForEach(model.availableVolumes) { volume in
+                    Button {
+                        Task { await model.select(volume) }
+                    } label: {
+                        Label(
+                            "\(volume.name) — \(volume.totalCapacity.formattedBytes)",
+                            systemImage: volume.symbolName)
+                    }
+                }
+                if model.availableVolumes.isEmpty {
+                    Text("No volumes found").foregroundStyle(.secondary)
+                }
+                Divider()
+                Button("Refresh Disks") { model.refreshVolumes() }
+            } label: {
+                Label(
+                    model.selectedVolume?.name ?? "Disk",
+                    systemImage: model.selectedVolume?.symbolName ?? "internaldrive")
+            }
+            .menuIndicator(.visible)
+            .accessibilityLabel("Choose which disk to analyze")
+        }
+
         ToolbarItem(placement: .primaryAction) {
             Button {
                 Task {
@@ -229,18 +279,34 @@ struct ContentView: View {
 
 struct SettingsView: View {
     @Bindable var model: AppModel
+    @Bindable var appearance: AppearanceController
 
     var body: some View {
         Form {
-            LabeledContent("Scan root", value: model.scanRoot)
-            Text(
-                "Disker scans the data volume. The sealed system volume is a separate ~12 GB "
-                    + "of macOS that cannot be modified or reclaimed."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            Section("Appearance") {
+                Picker("Theme", selection: $appearance.mode) {
+                    ForEach(AppearanceMode.allCases) { mode in
+                        Label(mode.label, systemImage: mode.symbolName).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+                Text("The app icon follows the same setting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Section("Disk") {
+                LabeledContent("Analyzing", value: model.selectedVolume?.name ?? "—")
+                LabeledContent("Path", value: model.scanRoot)
+                Text(
+                    "Disker analyzes the data volume. The sealed system volume is a separate "
+                        + "~12 GB of macOS that cannot be modified or reclaimed."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 160)
+        .frame(width: 460, height: 380)
     }
 }

@@ -81,9 +81,10 @@ struct RecommendationBar: View {
         // The system's own glass button, rather than a tinted rectangle. It picks up the
         // same lensing as the panels, so the primary action belongs to the surface it sits on.
         .buttonStyle(.glassProminent)
-        .disabled(model.moleReport == nil)
-        .help("Opens Mole in Terminal, where you can review each step and authorise sudo.")
-        .accessibilityLabel("Clean with Mole, opens Terminal")
+        // Not gated on the background dry-run report. The sheet runs its own preview, so
+        // waiting on a summary that takes up to a minute only made the button look broken.
+        .help("Runs Mole inside Disker, starting with a preview of what it would remove.")
+        .accessibilityLabel("Clean with Mole")
     }
 }
 

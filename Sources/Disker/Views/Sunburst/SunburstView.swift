@@ -66,6 +66,13 @@ struct SunburstView: View {
                 if let segment = model.hoveredSegment ?? model.selectedSegment {
                     Button("Reveal in Finder") { model.revealInFinder(segment) }
                     Button("Copy Path") { model.copyPath(segment) }
+                    Divider()
+                    Button("Move to Trash", role: .destructive) {
+                        model.requestDeletion(of: segment)
+                    }
+                    // Aggregates stand for many files at once and have no single path to
+                    // delete, so the action would be a lie.
+                    .disabled(segment.node.kind == .aggregate)
                 }
             }
             // The chart is a single accessibility element with a readable summary. Exposing

@@ -54,10 +54,42 @@ final class AppModel {
     private let scanner = VolumeScanner()
     private let mole = MoleClient()
 
+    /// Volumes offered in the disk picker.
+    var availableVolumes: [Volume] = []
+    /// The volume currently being analysed.
+    var selectedVolume: Volume?
+
     /// The data volume, not `/`. The sealed system volume is ~12 GB of immutable OS that a
     /// user can neither browse nor reclaim, so rooting the chart there would show them
     /// almost nothing they care about.
-    var scanRoot = "/System/Volumes/Data"
+    var scanRoot: String { selectedVolume?.path ?? "/System/Volumes/Data" }
+
+    var showingMoleSheet = false
+    /// Pending deletion awaiting confirmation, shown in a dialog before anything moves.
+    var pendingDeletion: (path: String, name: String, size: UInt64)?
+
+    func refreshVolumes() {
+        availableVolumes = VolumeCatalog.mountedVolumes()
+        if selectedVolume == nil || !availableVolumes.contains(where: { $0.id == selectedVolume?.id })
+        {
+            selectedVolume = VolumeCatalog.defaultVolume() ?? availableVolumes.first
+        }
+    }
+
+    /// Switches volumes, showing that disk's cached scan if there is one.
+    func select(_ volume: Volume) async {
+        guard volume.id != selectedVolume?.id else { return }
+        selectedVolume = volume
+        drillPath = []
+        segments = []
+        selectedSegment = nil
+        hoveredSegment = nil
+        recommendations = []
+        refreshVolume()
+        if !loadCachedScan() {
+            await scan()
+        }
+    }
 
     var currentRoot: FileNode? { drillPath.last }
 
@@ -204,21 +236,53 @@ final class AppModel {
         moleReport = try? await mole.dryRun()
     }
 
-    /// Hands off to Mole in Terminal.
+    /// Opens the in-app cleanup terminal.
     ///
-    /// Deliberately not silent: `mole clean` is an interactive TUI with no headless mode, and
-    /// a full clean needs sudo. Driving it from a privileged helper would mean bypassing the
-    /// confirmations Mole shows before deleting, so the user reviews and authorises in the
-    /// terminal where those prompts actually appear.
+    /// This replaced an AppleScript handoff that asked Terminal.app to run `mole clean`.
+    /// That call requires Automation permission; without it it blocks indefinitely, which
+    /// is why the button appeared to open a terminal and then do nothing. Running Mole on a
+    /// pty inside Disker needs no cross-app permission and keeps the user in one window,
+    /// while still showing every confirmation Mole asks for.
     func launchMoleCleanup() {
-        let script = """
-            tell application "Terminal"
-                activate
-                do script "mole clean"
-            end tell
-            """
-        guard let appleScript = NSAppleScript(source: script) else { return }
-        var error: NSDictionary?
-        appleScript.executeAndReturnError(&error)
+        showingMoleSheet = true
+    }
+
+    /// Asks before moving a scanned item to the Trash.
+    ///
+    /// Deletion from the chart is confirmed rather than immediate: a wedge is a small target,
+    /// clicks there are exploratory, and the sizes involved run to gigabytes.
+    func requestDeletion(of segment: SunburstSegment) {
+        pendingDeletion = (
+            path: absolutePath(for: segment),
+            name: segment.node.name,
+            size: segment.node.size
+        )
+    }
+
+    /// Performs the confirmed deletion, registering undo.
+    func confirmDeletion() {
+        guard let pending = pendingDeletion else { return }
+        pendingDeletion = nil
+
+        let (trashed, failures) = TrashService.moveToTrash(paths: [pending.path])
+        if let failure = failures.first {
+            lastError = failure.localizedDescription
+            return
+        }
+        guard !trashed.isEmpty else { return }
+
+        undoManager.registerUndo(withTarget: self) { model in
+            let restoreFailures = TrashService.restore(trashed)
+            if let failure = restoreFailures.first {
+                model.lastError = failure.localizedDescription
+            }
+        }
+        undoManager.setActionName("Move \(pending.name) to Trash")
+
+        // The chart still shows the item until the tree is rebuilt. Rather than silently
+        // re-walking the disk, say plainly that the figures are now behind.
+        lastError =
+            "Moved \(pending.name) to the Trash (\(pending.size.formattedBytes)). "
+            + "Press ⌘Z to undo, or ⌘R to re-scan and update the chart."
     }
 }

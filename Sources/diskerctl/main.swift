@@ -77,6 +77,40 @@ case "scan":
         print("  unreadable  \(result.inaccessibleCount) directories — total is a lower bound")
     }
 
+case "volumes":
+    if arguments.contains("--verbose") {
+        print("All mount points reported by FileManager:")
+        let keys: [URLResourceKey] = [
+            .volumeNameKey, .volumeTotalCapacityKey, .volumeIsInternalKey,
+            .volumeIsRemovableKey, .volumeIsBrowsableKey, .volumeIsLocalKey,
+        ]
+        for url in FileManager.default.mountedVolumeURLs(
+            includingResourceValuesForKeys: keys, options: []) ?? []
+        {
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            print(
+                "  \(url.path)\n"
+                    + "     name=\(values?.volumeName ?? "?") "
+                    + "capacity=\(values?.volumeTotalCapacity ?? -1) "
+                    + "local=\(String(describing: values?.volumeIsLocal)) "
+                    + "browsable=\(String(describing: values?.volumeIsBrowsable)) "
+                    + "internal=\(String(describing: values?.volumeIsInternal)) "
+                    + "removable=\(String(describing: values?.volumeIsRemovable))")
+        }
+        print("")
+    }
+    let volumes = VolumeCatalog.mountedVolumes()
+    guard !volumes.isEmpty else {
+        print("No volumes found.")
+        exit(1)
+    }
+    for volume in volumes {
+        let kind = volume.isRemovable ? "removable" : (volume.isInternal ? "internal" : "external")
+        print("  \(formatBytes(volume.totalCapacity).padded(to: 10))  \(volume.name)  [\(kind)]")
+        print("  \(String(repeating: " ", count: 12))\(volume.path)")
+    }
+    print("\n  default: \(VolumeCatalog.defaultVolume()?.name ?? "none")")
+
 case "recommend":
     let path = arguments.count >= 3 ? arguments[2] : NSHomeDirectory()
     let result = try await VolumeScanner().scan(path: path)
