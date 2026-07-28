@@ -1,32 +1,163 @@
+import DiskerCore
 import SwiftUI
 
 @main
 struct DiskerApp: App {
+    @State private var model = AppModel()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .frame(minWidth: 900, minHeight: 600)
+            ContentView(model: model)
+                .frame(minWidth: 940, minHeight: 620)
         }
-        .defaultSize(width: 1280, height: 840)
+        .defaultSize(width: 1360, height: 880)
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unified)
+        .commands { DiskerCommands(model: model) }
+
+        Settings { SettingsView(model: model) }
     }
 }
 
 struct ContentView: View {
+    @Bindable var model: AppModel
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "internaldrive")
-                .font(.system(size: 44, weight: .light))
-                .foregroundStyle(.secondary)
-            Text("Disker")
-                .font(.largeTitle.weight(.semibold))
-            Text("Scaffold running")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            SidebarView(model: model)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+        } detail: {
+            detail
         }
-        .padding(40)
-        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+        .navigationTitle(model.volume?.name ?? "Disker")
+        .navigationSubtitle(subtitle)
+        .toolbar { toolbarContent }
+        .task {
+            // Kick off automatically: an empty window with a "Scan" button asks the user to
+            // confirm the one thing they opened the app to do.
+            model.refreshVolume()
+            await model.scan()
+            await model.loadMoleReport()
+        }
+    }
+
+    private var subtitle: String {
+        switch model.scanState {
+        case .loaded(let result): return "\(result.root.size.formattedBytes) analyzed"
+        case .scanning(let progress):
+            return progress.map { "\($0.filesScanned.formatted()) files…" } ?? "Scanning…"
+        case .failed: return "Scan failed"
+        case .idle: return ""
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        VStack(spacing: 14) {
+            HStack(alignment: .top, spacing: 14) {
+                chartPanel
+                InspectorView(model: model)
+            }
+            RecommendationBar(model: model)
+        }
+        .padding(14)
+    }
+
+    @ViewBuilder
+    private var chartPanel: some View {
+        VStack(spacing: 10) {
+            breadcrumb
+            switch model.scanState {
+            case .scanning(let progress):
+                scanningState(progress)
+            case .failed(let message):
+                ContentUnavailableView(
+                    "Scan failed", systemImage: "exclamationmark.triangle", description: Text(message))
+            case .loaded, .idle:
+                SunburstView(model: model)
+                CategoryLegend(root: model.currentRoot)
+                    .padding(.bottom, 6)
+            }
+        }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(16)
+        .glassPanel()
+    }
+
+    private func scanningState(_ progress: ScanProgress?) -> some View {
+        VStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.large)
+            Text(progress.map { "\($0.filesScanned.formatted()) files" } ?? "Starting…")
+                .font(.headline)
+            if let progress {
+                Text(progress.currentPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 420)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var breadcrumb: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(model.breadcrumb.enumerated()), id: \.offset) { index, node in
+                if index > 0 {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                Button(node.name) {
+                    model.drillUp(to: index)
+                }
+                .buttonStyle(.plain)
+                .font(index == model.breadcrumb.count - 1 ? .headline : .subheadline)
+                .foregroundStyle(index == model.breadcrumb.count - 1 ? .primary : .secondary)
+            }
+            Spacer()
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                Task {
+                    await model.scan()
+                    await model.loadMoleReport()
+                }
+            } label: {
+                Label("Re-scan", systemImage: "arrow.clockwise")
+            }
+            .accessibilityLabel("Re-scan this volume")
+            .disabled(isScanning)
+        }
+    }
+
+    private var isScanning: Bool {
+        if case .scanning = model.scanState { return true }
+        return false
+    }
+}
+
+struct SettingsView: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Form {
+            LabeledContent("Scan root", value: model.scanRoot)
+            Text(
+                "Disker scans the data volume. The sealed system volume is a separate ~12 GB "
+                    + "of macOS that cannot be modified or reclaimed."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        .formStyle(.grouped)
+        .frame(width: 420, height: 160)
     }
 }
