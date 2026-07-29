@@ -280,15 +280,18 @@ struct MoleCleanupSheet: View {
     // MARK: - Terminal
 
     private var terminal: some View {
-        ScrollView([.vertical, .horizontal]) {
-            TerminalScreenView(cells: session.cells, fontSize: 11.5)
-                .padding(10)
-        }
-        .background(.black.opacity(0.5))
-        .overlay {
+        ZStack {
+            ScrollView([.vertical, .horizontal]) {
+                TerminalScreenView(cells: session.cells, fontSize: 11.5)
+                    .padding(10)
+            }
+            .background(.black.opacity(0.5))
+
+            // Fills the terminal and is hit-testable, so clicking anywhere in the output
+            // focuses it. Previously this was a zero-size view with hit testing disabled,
+            // which could not hold first responder — keystrokes never reached Mole, so its
+            // "Enter continue" prompt appeared to be ignored.
             TerminalKeyCatcher { session.send($0) }
-                .allowsHitTesting(false)
-                .frame(width: 0, height: 0)
         }
     }
 

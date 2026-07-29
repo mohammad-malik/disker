@@ -37,6 +37,14 @@ public struct Recommendation: Sendable, Identifiable {
             parent.hasPrefix(home) ? "~" + parent.dropFirst(home.count) : parent
     }
 
+    /// Returns a copy at a different tier, used when a match is real but riskier than the
+    /// rule that found it assumed.
+    func reclassified(as tier: Tier, detail: String) -> Recommendation {
+        Recommendation(
+            title: title, detail: detail, path: path, size: size,
+            tier: tier, symbolName: symbolName)
+    }
+
     /// How much scrutiny an item deserves before deletion.
     ///
     /// Nothing is ever removed automatically regardless of tier — the tier decides how the
@@ -128,7 +136,8 @@ public enum RecommendationEngine {
 
     public static func analyze(
         result: ScanResult,
-        now: Date = Date()
+        now: Date = Date(),
+        policy: SafetyPolicy = SafetyPolicy.loadingMoleWhitelist()
     ) -> [Recommendation] {
         var found: [Recommendation] = []
         let rootPath = result.rootPath
@@ -143,7 +152,28 @@ public enum RecommendationEngine {
                 // the app rather than reclaiming build output.
                 if isBundle(node.name) { return }
 
-                if let match = classifyDirectory(node, components: components, path: path, now: now) {
+                // Installed software and anything the user told Mole to protect. Descending
+                // is pointless too — nothing beneath a global install root is build output.
+                if policy.isExcluded(path) { return }
+
+                // Holds something protected, so it cannot be offered as a whole — but keep
+                // walking, since unprotected artifacts may still sit inside it.
+                if policy.containsProtectedContent(path) {
+                    for child in node.children {
+                        walk(child, components: components + [child.name])
+                    }
+                    return
+                }
+
+                if var match = classifyDirectory(node, components: components, path: path, now: now) {
+                    // Regenerable, but removing it breaks a working tool until it can
+                    // re-download. That is not what "safe" should promise.
+                    if policy.isToolRuntime(path), match.tier == .safe {
+                        match = match.reclassified(
+                            as: .review,
+                            detail: "Cache for an installed tool — it will re-download this, "
+                                + "but the tool stops working until it does.")
+                    }
                     found.append(match)
                     // Do not descend: the directory is the actionable unit, and its contents
                     // would otherwise generate hundreds of redundant suggestions.
@@ -188,7 +218,14 @@ public enum RecommendationEngine {
         }
 
         // Xcode's caches are the single largest reclaimable directory on most dev machines.
-        if components.suffix(2) == ["Developer", "Xcode"] || components.last == "Archives" {
+        //
+        // Requires the full Library/Developer/Xcode location rather than matching a bare
+        // "Archives" component: that looser rule matched /private/var/db/powerlog/Library/
+        // BatteryLife/Archives, offering to delete system power logs as "Xcode Archives".
+        if components.count >= 3,
+            components.suffix(3).prefix(2) == ["Library", "Developer"],
+            components.dropLast().last == "Xcode" || components.suffix(2).first == "Xcode"
+        {
             return Recommendation(
                 title: "Xcode \(components.last ?? "data")",
                 detail: "Derived data and archives are rebuilt on demand.",

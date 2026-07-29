@@ -98,15 +98,38 @@ struct TerminalKeyCatcher: NSViewRepresentable {
 
     func updateNSView(_ nsView: KeyView, context: Context) {
         nsView.onKey = onKey
+        // Focus can be lost when the sheet swaps between the options form and the terminal.
+        if nsView.window?.firstResponder !== nsView { nsView.claimFocus() }
     }
 
     final class KeyView: NSView {
         var onKey: ((String) -> Void)?
 
         override var acceptsFirstResponder: Bool { true }
+        /// Takes focus on the first click rather than requiring a second.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            claimFocus()
+        }
+
+        /// Re-asserts first responder.
+        ///
+        /// The sheet installs its own focus after presenting, so claiming it once while the
+        /// view is being added is not enough — the terminal ended up unable to receive keys
+        /// at all, which is why Mole's "Enter continue" prompt never responded. Deferring
+        /// puts this after the sheet's own focus work.
+        func claimFocus() {
+            guard let window else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.window != nil else { return }
+                window.makeFirstResponder(self)
+            }
+        }
+
+        // Clicking the terminal focuses it, the same as clicking into any text area.
+        override func mouseDown(with event: NSEvent) {
             window?.makeFirstResponder(self)
         }
 
