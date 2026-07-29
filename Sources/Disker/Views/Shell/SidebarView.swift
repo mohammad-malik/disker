@@ -8,16 +8,16 @@ struct SidebarView: View {
         VStack(spacing: 0) {
             List(selection: $model.section) {
                 Section {
-                    ForEach(AppModel.Section.allCases) { item in
-                        Label(item.rawValue, systemImage: item.symbolName)
+                    ForEach(AppModel.Section.fixed) { item in
+                        Label(item.title, systemImage: item.symbolName)
                             .tag(item)
-                            .badge(
-                                item == .recommendations && model.reclaimableSafely > 0
-                                    ? model.reclaimableSafely.formattedBytes : nil)
+                            .badge(badge(for: item))
                     }
                 }
 
                 Section("Locations") {
+                    // Selecting one opens that folder in the chart. Previously these were
+                    // inert labels that looked like navigation and did nothing.
                     ForEach(topLevelLocations, id: \.name) { location in
                         HStack {
                             Label(location.name, systemImage: location.symbol)
@@ -25,15 +25,34 @@ struct SidebarView: View {
                             Text(location.size.formattedBytes)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                                .monospacedDigit()
                         }
+                        .tag(AppModel.Section.location(location.name))
                     }
                 }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .onChange(of: model.section) { _, newValue in
+                if case .location(let name) = newValue {
+                    model.openLocation(named: name)
+                }
+            }
 
             FreeSpaceCard(volume: model.volume)
                 .padding(12)
+        }
+    }
+
+    private func badge(for item: AppModel.Section) -> String? {
+        switch item {
+        case .recommendations:
+            return model.reclaimableSafely > 0 ? model.reclaimableSafely.formattedBytes : nil
+        case .mole:
+            let total = model.moleReport?.totalReclaimable ?? 0
+            return total > 0 ? total.formattedBytes : nil
+        default:
+            return nil
         }
     }
 
@@ -43,12 +62,14 @@ struct SidebarView: View {
         let size: UInt64
     }
 
-    /// The largest children of the scan root, which is what the mock's "Locations" list shows.
     private var topLevelLocations: [Location] {
         guard case .loaded(let result) = model.scanState else { return [] }
-        return result.root.children.prefix(6).map { node in
-            Location(name: node.name, symbol: symbol(for: node.name), size: node.size)
-        }
+        return result.root.children
+            .filter { $0.isDirectory }
+            .prefix(8)
+            .map { node in
+                Location(name: node.name, symbol: symbol(for: node.name), size: node.size)
+            }
     }
 
     private func symbol(for name: String) -> String {
@@ -58,6 +79,8 @@ struct SidebarView: View {
         case "Library", "System": return "gearshape.fill"
         case "Documents": return "doc.fill"
         case "Downloads": return "arrow.down.circle.fill"
+        case "opt", "usr", "bin", "sbin": return "terminal.fill"
+        case "private", "var": return "lock.fill"
         default: return "folder.fill"
         }
     }

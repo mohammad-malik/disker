@@ -14,20 +14,50 @@ final class AppModel {
         case failed(String)
     }
 
-    enum Section: String, Hashable, CaseIterable, Identifiable {
-        case overview = "Storage Overview"
-        case recommendations = "Recommendations"
+    enum Section: Hashable, Identifiable {
+        case overview
+        case recommendations
+        case mole
+        /// A top-level folder from the scan, opened as its own view.
+        case location(String)
 
-        var id: String { rawValue }
+        var id: String {
+            switch self {
+            case .overview: return "overview"
+            case .recommendations: return "recommendations"
+            case .mole: return "mole"
+            case .location(let name): return "location:\(name)"
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .overview: return "Storage Overview"
+            case .recommendations: return "Recommendations"
+            case .mole: return "Mole"
+            case .location(let name): return name
+            }
+        }
+
         var symbolName: String {
             switch self {
             case .overview: return "chart.pie.fill"
             case .recommendations: return "sparkles"
+            case .mole: return "wand.and.sparkles"
+            case .location: return "folder.fill"
             }
         }
+
+        static var fixed: [Section] { [.overview, .recommendations, .mole] }
     }
 
     var section: Section = .overview
+    /// The inspector is collapsible; the chart is the point of the window and deserves the
+    /// space on a laptop display.
+    var showsInspector = true
+
+    let moleSession = MoleSession()
+    var moleConfiguration = MoleConfiguration()
     var scanState: ScanState = .idle
     var volume: VolumeInfo?
     var moleReport: MoleReport?
@@ -245,6 +275,40 @@ final class AppModel {
     /// while still showing every confirmation Mole asks for.
     func launchMoleCleanup() {
         showingMoleSheet = true
+    }
+
+    /// Opens one of Mole's own configuration screens (whitelist, project paths) in the
+    /// embedded terminal. These are interactive editors; reimplementing them in Disker would
+    /// mean writing to Mole's config format behind its back.
+    func runMoleSettings(argument: String) {
+        moleSession.runRaw(
+            arguments: [moleConfiguration.operation.rawValue, argument],
+            label: moleConfiguration.operation)
+        showingMoleSheet = true
+    }
+
+    func chooseExternalVolume() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: "/Volumes")
+        panel.prompt = "Choose"
+        if panel.runModal() == .OK, let url = panel.url {
+            moleConfiguration.externalVolumePath = url.path
+        }
+    }
+
+    /// Jumps the chart to a top-level folder.
+    func openLocation(named name: String) {
+        guard case .loaded(let result) = scanState,
+            let node = result.root.children.first(where: { $0.name == name })
+        else { return }
+        drillPath = [result.root, node]
+        selectedSegment = nil
+        hoveredSegment = nil
+        rebuildSegments()
+        section = .overview
     }
 
     /// Asks before moving a scanned item to the Trash.

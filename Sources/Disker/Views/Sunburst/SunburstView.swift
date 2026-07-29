@@ -42,21 +42,26 @@ struct SunburstView: View {
                         model.hoveredSegment = nil
                     }
                 }
-                .onTapGesture { location in
-                    let offset = (
-                        x: Double(location.x - center.x), y: Double(location.y - center.y)
-                    )
-                    guard
-                        let hit = SunburstLayout.segment(
-                            at: offset, in: model.segments,
-                            innerRadius: Double(innerRadius), ringWidth: Double(ringWidth))
-                    else { return }
-                    model.selectedSegment = hit
-                    if hit.node.isDirectory {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85)) {
-                            model.drillDown(into: hit.node)
-                        }
+                // Double-click drills in; single click only selects.
+                //
+                // These were the same gesture before, so a folder could never be selected —
+                // clicking one to delete it opened it instead, and there was no way to act
+                // on a directory at all. Registered before the single-tap handler so SwiftUI
+                // gives the double-click priority.
+                .onTapGesture(count: 2) { location in
+                    guard let hit = segment(at: location, center: center,
+                        innerRadius: innerRadius, ringWidth: ringWidth) else { return }
+                    guard hit.node.isDirectory, !hit.node.children.isEmpty else { return }
+                    withAnimation(
+                        reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85)
+                    ) {
+                        model.drillDown(into: hit.node)
                     }
+                }
+                .onTapGesture { location in
+                    model.selectedSegment = segment(
+                        at: location, center: center,
+                        innerRadius: innerRadius, ringWidth: ringWidth)
                 }
 
                 hub(radius: innerRadius)
@@ -168,6 +173,16 @@ struct SunburstView: View {
             symbol.shading = .color(.white.opacity(0.95))
             context.draw(symbol, at: point)
         }
+    }
+
+    private func segment(
+        at location: CGPoint, center: CGPoint, innerRadius: CGFloat, ringWidth: CGFloat
+    ) -> SunburstSegment? {
+        SunburstLayout.segment(
+            at: (x: Double(location.x - center.x), y: Double(location.y - center.y)),
+            in: model.segments,
+            innerRadius: Double(innerRadius),
+            ringWidth: Double(ringWidth))
     }
 
     /// Follows the pointer: the hub takes on the colour of the wedge under it, which makes

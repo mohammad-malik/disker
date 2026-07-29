@@ -87,6 +87,20 @@ struct DiskerCommands: Commands {
             }
             .keyboardShortcut("c", modifiers: [.command, .option])
             .disabled(model.selectedSegment == nil && model.hoveredSegment == nil)
+
+            Divider()
+
+            // The standard Mac gesture for removing what is selected. Acts only on an
+            // explicit selection, never on whatever the pointer happens to be over.
+            Button("Move Selected to Trash") {
+                if let segment = model.selectedSegment {
+                    model.requestDeletion(of: segment)
+                }
+            }
+            .keyboardShortcut(.delete, modifiers: .command)
+            .disabled(
+                model.selectedSegment == nil
+                    || model.selectedSegment?.node.kind == .aggregate)
         }
 
         CommandGroup(after: .toolbar) {
@@ -97,6 +111,11 @@ struct DiskerCommands: Commands {
             }
 
             Divider()
+
+            Button(model.showsInspector ? "Hide Details" : "Show Details") {
+                model.showsInspector.toggle()
+            }
+            .keyboardShortcut("i", modifiers: [.command, .control])
 
             Button("Toggle Sidebar") {
                 NSApp.keyWindow?.firstResponder?.tryToPerform(

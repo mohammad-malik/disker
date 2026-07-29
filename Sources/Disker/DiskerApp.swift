@@ -134,18 +134,31 @@ struct ContentView: View {
                 }
 
                 switch model.section {
-                case .overview:
+                case .overview, .location:
+                    // The chart is the main view; everything else is a peer section rather
+                    // than something layered on top of it.
                     HStack(alignment: .top, spacing: 14) {
                         chartPanel
-                        InspectorView(model: model)
+                        if model.showsInspector {
+                            InspectorView(model: model)
+                                .transition(.move(edge: .trailing).combined(with: .opacity))
+                        }
                     }
                 case .recommendations:
                     RecommendationsPanel(model: model)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .glassPanel()
+                case .mole:
+                    MoleView(model: model)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .glassPanel()
                 }
 
-                RecommendationBar(model: model)
+                // Only on the chart: the other sections already show this information in
+                // full, and repeating it below them is noise.
+                if case .overview = model.section {
+                    RecommendationBar(model: model)
+                }
             }
         }
         .padding(14)
@@ -268,6 +281,27 @@ struct ContentView: View {
             }
             .accessibilityLabel("Re-scan this volume")
             .disabled(isScanning)
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            if case .recommendations = model.section {
+                EmptyView()
+            } else if case .mole = model.section {
+                EmptyView()
+            } else {
+                Button {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
+                        model.showsInspector.toggle()
+                    }
+                } label: {
+                    Label(
+                        model.showsInspector ? "Hide Details" : "Show Details",
+                        systemImage: "sidebar.right")
+                }
+                .help("Show or hide the details panel (⌃⌘I)")
+                .accessibilityLabel(
+                    model.showsInspector ? "Hide details panel" : "Show details panel")
+            }
         }
     }
 

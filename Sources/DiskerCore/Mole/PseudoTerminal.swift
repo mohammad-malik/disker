@@ -150,13 +150,33 @@ public final class PseudoTerminal: @unchecked Sendable {
         _ = withUnsafeMutablePointer(to: &size) { ioctl(fd, TIOCSWINSZ, $0) }
     }
 
-    /// Interrupts the child, as Ctrl-C would.
+    /// Interrupts the child, as pressing Ctrl-C in a terminal would.
+    ///
+    /// Signalling the child pid directly is not enough, which is why the first version's
+    /// Stop button did nothing. Mole runs helpers in its own process group, and in raw mode
+    /// it reads the interrupt as input rather than receiving a signal at all. So this does
+    /// both: writes the literal Ctrl-C byte, which the line discipline turns into SIGINT for
+    /// whatever is in the foreground (or which a raw-mode reader handles itself), and
+    /// signals the whole process group so children are not left running.
     public func interrupt() {
         lock.lock()
+        let fd = primaryFD
         let pid = childPID
         lock.unlock()
         guard pid > 0 else { return }
-        kill(pid, SIGINT)
+
+        if fd >= 0 {
+            var byte: UInt8 = 0x03
+            _ = write(fd, &byte, 1)
+        }
+
+        // forkpty makes the child a session leader, so its pid is also its group id.
+        let group = getpgid(pid)
+        if group > 0 {
+            killpg(group, SIGINT)
+        } else {
+            kill(pid, SIGINT)
+        }
     }
 
     public func terminate() {
@@ -164,6 +184,10 @@ public final class PseudoTerminal: @unchecked Sendable {
         let pid = childPID
         lock.unlock()
         readSource?.cancel()
-        if pid > 0 { kill(pid, SIGTERM) }
+        guard pid > 0 else { return }
+        // Whole group, for the same reason interrupt() does: leaving Mole's helpers running
+        // after the window closed would keep deleting with nothing on screen to show it.
+        let group = getpgid(pid)
+        if group > 0 { killpg(group, SIGTERM) } else { kill(pid, SIGTERM) }
     }
 }
