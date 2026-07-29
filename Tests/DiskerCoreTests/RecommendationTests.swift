@@ -61,6 +61,68 @@ struct RecommendationTests {
         #expect(found.first?.title.contains("node_modules") == true)
     }
 
+    @Test("node_modules inside an app bundle is never suggested")
+    func doesNotSuggestDeletingInsideAppBundles() {
+        // Exactly the shape a real Electron app has on disk. Deleting this node_modules
+        // does not reclaim build output — it breaks the installed application.
+        let tree = directory(
+            "Applications",
+            [
+                directory(
+                    "T3 Code.app",
+                    [
+                        directory(
+                            "Contents",
+                            [
+                                directory(
+                                    "Resources",
+                                    [
+                                        directory(
+                                            "app.asar.unpacked",
+                                            [
+                                                directory(
+                                                    "node_modules",
+                                                    [file("index.js", 458_000_000)])
+                                            ])
+                                    ])
+                            ])
+                    ])
+            ])
+
+        let found = RecommendationEngine.analyze(result: result(root: directory("root", [tree])))
+
+        #expect(found.isEmpty)
+    }
+
+    @Test("Bundle detection covers the common wrappers")
+    func recognisesBundleExtensions() {
+        #expect(RecommendationEngine.isBundle("Safari.app"))
+        #expect(RecommendationEngine.isBundle("Electron.framework"))
+        #expect(RecommendationEngine.isBundle("Widget.appex"))
+        #expect(RecommendationEngine.isBundle("Photos.photoslibrary"))
+        // A project directory that merely contains a dot must not be mistaken for one.
+        #expect(!RecommendationEngine.isBundle("node_modules"))
+        #expect(!RecommendationEngine.isBundle("my.project"))
+        #expect(!RecommendationEngine.isBundle(".venv"))
+    }
+
+    @Test("Real project artifacts are still found outside bundles")
+    func stillFindsRealArtifacts() {
+        // The bundle guard must not suppress the case the feature exists for.
+        let tree = directory(
+            "Users",
+            [
+                directory(
+                    "alex",
+                    [directory("myapp", [directory("node_modules", [file("a.js", 900_000_000)])])])
+            ])
+
+        let found = RecommendationEngine.analyze(result: result(root: directory("root", [tree])))
+
+        #expect(found.count == 1)
+        #expect(found.first?.tier == .safe)
+    }
+
     @Test("Trash is flagged")
     func flagsTrash() {
         let tree = directory("Users", [directory("alex", [directory(".Trash", [file("junk", 500_000_000)])])])

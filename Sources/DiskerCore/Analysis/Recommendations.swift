@@ -103,6 +103,25 @@ public enum RecommendationEngine {
         "target",  // Rust and Maven
     ]
 
+    /// Directory suffixes that mark a macOS bundle.
+    ///
+    /// Recommendations never descend into these. Electron and similar frameworks ship a real
+    /// `node_modules` inside `Contents/Resources`, and it matched the build-artifact rule
+    /// exactly — so the list offered to delete the internals of installed applications, which
+    /// would break them. Nothing inside a bundle is a build artifact from the user's point of
+    /// view; it is part of the shipped program.
+    private static let bundleExtensions: Set<String> = [
+        "app", "framework", "bundle", "appex", "xpc", "plugin", "kext",
+        "prefPane", "qlgenerator", "component", "systemextension", "dext",
+        "mdimporter", "saver", "service", "wdgt", "photoslibrary", "musiclibrary",
+        "tvlibrary", "fcpbundle", "logicx", "band", "sparsebundle",
+    ]
+
+    static func isBundle(_ name: String) -> Bool {
+        let ext = (name as NSString).pathExtension
+        return !ext.isEmpty && bundleExtensions.contains(ext)
+    }
+
     private static let largeFileThreshold: UInt64 = 1_000_000_000  // 1 GB
     private static let staleInterval: TimeInterval = 180 * 24 * 3600  // ~6 months
     private static let downloadStaleInterval: TimeInterval = 90 * 24 * 3600
@@ -119,6 +138,11 @@ public enum RecommendationEngine {
                 .replacingOccurrences(of: "//", with: "/")
 
             if node.isDirectory {
+                // Stop at bundle boundaries. Everything below belongs to an installed
+                // application, not to the user's projects, and removing any of it breaks
+                // the app rather than reclaiming build output.
+                if isBundle(node.name) { return }
+
                 if let match = classifyDirectory(node, components: components, path: path, now: now) {
                     found.append(match)
                     // Do not descend: the directory is the actionable unit, and its contents

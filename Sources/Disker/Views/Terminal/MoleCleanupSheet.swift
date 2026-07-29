@@ -11,10 +11,12 @@ struct MoleCleanupSheet: View {
     @Bindable var model: AppModel
     @Environment(\.dismiss) private var dismiss
 
-    /// Shows the terminal when a run exists, otherwise the configuration form. Reopening
-    /// after "Close (keeps running)" therefore returns to the run in progress.
-    @State private var showingTerminal = false
     @State private var confirmingDestructive = false
+
+    /// Shows the terminal when a run exists, otherwise the options form. Backed by the model
+    /// so a run started from outside this sheet's own buttons still brings the terminal
+    /// forward.
+    private var showingTerminal: Bool { model.moleShowingTerminal }
 
     private var session: MoleSession { model.moleSession }
 
@@ -35,7 +37,7 @@ struct MoleCleanupSheet: View {
         // should follow the chosen appearance like everything else.
         .background(showingTerminal ? Color(white: 0.06) : Color.clear)
         .modifier(DarkWhenTerminal(active: showingTerminal))
-        .onAppear { showingTerminal = session.hasOutput }
+        .onAppear { model.moleShowingTerminal = session.hasOutput }
         .confirmationDialog(
             "Run for real?", isPresented: $confirmingDestructive
         ) {
@@ -75,7 +77,7 @@ struct MoleCleanupSheet: View {
             }
             if showingTerminal, !session.isRunning {
                 Button {
-                    showingTerminal = false
+                    model.moleShowingTerminal = false
                 } label: {
                     Label("New Run", systemImage: "chevron.backward")
                 }
@@ -331,18 +333,25 @@ struct MoleCleanupSheet: View {
             Spacer()
 
             if showingTerminal, !session.isRunning {
-                Button("Clear") { session.reset(); showingTerminal = false }
+                Button("Clear") { session.reset(); model.moleShowingTerminal = false }
             }
 
-            Button(session.isRunning ? "Close (keeps running)" : "Close") { dismiss() }
+            // "Minimize" while a run is in progress: the window goes away but Mole keeps
+            // working, and reopening returns to it. Plain "Close" otherwise, where there is
+            // nothing to leave running.
+            Button(session.isRunning ? "Minimize" : "Close") { dismiss() }
                 .keyboardShortcut(.cancelAction)
+                .help(
+                    session.isRunning
+                        ? "Hides this window. Mole keeps running and you can reopen it."
+                        : "Closes this window.")
         }
         .padding(12)
     }
 
     private func start() {
         session.run(model.moleConfiguration)
-        showingTerminal = true
+        model.moleShowingTerminal = true
     }
 }
 

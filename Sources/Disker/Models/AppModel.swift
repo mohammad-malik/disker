@@ -58,6 +58,14 @@ final class AppModel {
 
     let moleSession = MoleSession()
     var moleConfiguration = MoleConfiguration()
+
+    /// Whether the Mole sheet is showing the terminal rather than the options form.
+    ///
+    /// Lives here rather than in the sheet's `@State` because runs can start from outside the
+    /// sheet's own buttons — "Manage whitelist" launches one while the options form is on
+    /// screen. As sheet-local state it never flipped, so the whitelist editor started
+    /// invisibly behind the form and the button looked broken.
+    var moleShowingTerminal = false
     var scanState: ScanState = .idle
     var volume: VolumeInfo?
     var moleReport: MoleReport?
@@ -302,6 +310,7 @@ final class AppModel {
         moleSession.runRaw(
             arguments: [moleConfiguration.operation.rawValue, argument],
             label: moleConfiguration.operation)
+        moleShowingTerminal = true
         showingMoleSheet = true
     }
 
