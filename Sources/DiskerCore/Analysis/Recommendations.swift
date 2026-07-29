@@ -14,12 +14,27 @@ public struct Recommendation: Sendable, Identifiable {
     /// Needed because titles collide constantly in practice — a real scan turned up three
     /// separate "node_modules in frontend" entries. Without the location there is no way to
     /// tell which one is about to be deleted.
-    public var displayPath: String {
+    ///
+    /// Stored rather than computed: a full scan produces well over a thousand of these, and
+    /// as a computed property it re-ran `NSHomeDirectory()` plus string manipulation for
+    /// every row on every render pass.
+    public let displayPath: String
+
+    init(
+        title: String, detail: String, path: String, size: UInt64,
+        tier: Tier, symbolName: String
+    ) {
+        self.title = title
+        self.detail = detail
+        self.path = path
+        self.size = size
+        self.tier = tier
+        self.symbolName = symbolName
+
         let home = NSHomeDirectory()
         let parent = (path as NSString).deletingLastPathComponent
-        return parent.hasPrefix(home)
-            ? "~" + parent.dropFirst(home.count)
-            : parent
+        self.displayPath =
+            parent.hasPrefix(home) ? "~" + parent.dropFirst(home.count) : parent
     }
 
     /// How much scrutiny an item deserves before deletion.
@@ -50,6 +65,33 @@ public struct Recommendation: Sendable, Identifiable {
 ///
 /// Works entirely from the in-memory tree rather than re-walking the disk, so producing
 /// suggestions costs nothing on top of the scan the user already waited for.
+/// Recommendations grouped by tier, with totals, computed once.
+///
+/// The view used to derive this on every body evaluation — filtering the whole list per tier
+/// and summing it again each time. With over a thousand entries that ran constantly, including
+/// on every mouse move.
+public struct RecommendationGroup: Sendable, Identifiable {
+    public let tier: Recommendation.Tier
+    public let items: [Recommendation]
+    public let totalSize: UInt64
+
+    public var id: Int { tier.rawValue }
+
+    public init(tier: Recommendation.Tier, items: [Recommendation]) {
+        self.tier = tier
+        self.items = items
+        self.totalSize = items.reduce(UInt64(0)) { $0 &+ $1.size }
+    }
+
+    public static func group(_ recommendations: [Recommendation]) -> [RecommendationGroup] {
+        var buckets: [Recommendation.Tier: [Recommendation]] = [:]
+        for item in recommendations {
+            buckets[item.tier, default: []].append(item)
+        }
+        return buckets.keys.sorted().map { RecommendationGroup(tier: $0, items: buckets[$0] ?? []) }
+    }
+}
+
 public enum RecommendationEngine {
 
     /// Build artefacts and caches that any competent toolchain will recreate.

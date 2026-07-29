@@ -71,7 +71,11 @@ final class AppModel {
     var hoveredSegment: SunburstSegment?
     var selectedSegment: SunburstSegment?
 
-    var recommendations: [Recommendation] = []
+    var recommendations: [Recommendation] = [] {
+        didSet { recommendationGroups = RecommendationGroup.group(recommendations) }
+    }
+    /// Grouped once on assignment, so the view never re-derives it while scrolling.
+    private(set) var recommendationGroups: [RecommendationGroup] = []
     var hasFullDiskAccess = true
     var showingAccessSheet = false
     /// Surfaced inline rather than as a modal alert — a failed delete is information,
@@ -116,7 +120,7 @@ final class AppModel {
         hoveredSegment = nil
         recommendations = []
         refreshVolume()
-        if !loadCachedScan() {
+        if await !loadCachedScan() {
             await scan()
         }
     }
@@ -139,14 +143,16 @@ final class AppModel {
     /// Returns whether anything was restored, so the caller can decide to scan instead of
     /// making the user watch a spinner for numbers that have barely changed since yesterday.
     @discardableResult
-    func loadCachedScan() -> Bool {
+    func loadCachedScan() async -> Bool {
         guard let entry = ScanCache.shared.load(expecting: scanRoot) else { return false }
         let result = entry.result
         scanState = .loaded(result)
         drillPath = [result.root]
         cachedAt = entry.scannedAt
         rebuildSegments()
-        recommendations = RecommendationEngine.analyze(result: result)
+        // Walks the whole tree; on a full volume that is hundreds of thousands of nodes.
+        // Running it inline blocked the main actor while the window was already visible.
+        recommendations = await Self.analyzeOffMain(result)
         return true
     }
 
@@ -164,7 +170,9 @@ final class AppModel {
             drillPath = [result.root]
             cachedAt = nil
             rebuildSegments()
-            recommendations = RecommendationEngine.analyze(result: result)
+            // Walks the whole tree; on a full volume that is hundreds of thousands of nodes.
+        // Running it inline blocked the main actor while the window was already visible.
+        recommendations = await Self.analyzeOffMain(result)
             ScanCache.shared.save(result)
 
             // Only raise the access prompt when it would actually change the numbers:
@@ -176,6 +184,16 @@ final class AppModel {
             }
         } catch {
             scanState = .failed(error.localizedDescription)
+        }
+    }
+
+    private nonisolated static func analyzeOffMain(_ result: ScanResult) async
+        -> [Recommendation]
+    {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(returning: RecommendationEngine.analyze(result: result))
+            }
         }
     }
 

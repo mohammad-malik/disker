@@ -79,7 +79,7 @@ struct ContentView: View {
             // there is nothing to show — an empty window with a "Scan" button asks the user
             // to confirm the one thing they opened the app to do, but a three-minute spinner
             // over numbers that barely moved since yesterday is no better.
-            if !model.loadCachedScan() {
+            if await !model.loadCachedScan() {
                 await model.scan()
             }
             await model.loadMoleReport()

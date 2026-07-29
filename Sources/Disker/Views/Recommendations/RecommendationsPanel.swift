@@ -6,65 +6,61 @@ import SwiftUI
 /// Distinct from the Mole strip: Mole knows about system and app caches, while this works
 /// from the scanned tree and finds things specific to how the disk is actually laid out —
 /// a 4 GB node_modules in a project abandoned last year.
+///
+/// Built on `List` rather than `ScrollView` + `LazyVStack`. The previous version nested a
+/// plain `ForEach` inside each tier's `VStack`, so the outer `LazyVStack` had only three
+/// children and every one of the ~1,300 rows was constructed up front — the laziness bought
+/// nothing. `List` is backed by `NSTableView` and only realises visible rows, which is what
+/// makes a list this size usable at all.
 struct RecommendationsPanel: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 18) {
-                if model.recommendations.isEmpty {
-                    ContentUnavailableView(
-                        "Nothing obvious to clean",
-                        systemImage: "checkmark.circle",
-                        description: Text(
-                            "Disker found no build artefacts or stale large files. "
-                                + "The Mole panel may still have caches to clear.")
-                    )
-                    .padding(.top, 40)
-                } else {
-                    ForEach(tiers, id: \.self) { tier in
-                        section(for: tier)
+        Group {
+            if model.recommendations.isEmpty {
+                ContentUnavailableView(
+                    "Nothing obvious to clean",
+                    systemImage: "checkmark.circle",
+                    description: Text(
+                        "Disker found no build artefacts or stale large files. "
+                            + "The Mole panel may still have caches to clear.")
+                )
+            } else {
+                list
+            }
+        }
+    }
+
+    private var list: some View {
+        List {
+            ForEach(model.recommendationGroups) { group in
+                Section {
+                    ForEach(group.items) { item in
+                        RecommendationRow(item: item, model: model)
                     }
+                } header: {
+                    HStack {
+                        Text(group.tier.label)
+                            .font(.headline)
+                        Spacer()
+                        Text(group.totalSize.formattedBytes)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    .padding(.vertical, 2)
                 }
             }
-            .padding(16)
         }
-    }
-
-    private var tiers: [Recommendation.Tier] {
-        var seen: [Recommendation.Tier] = []
-        for item in model.recommendations where !seen.contains(item.tier) {
-            seen.append(item.tier)
-        }
-        return seen
-    }
-
-    private func section(for tier: Recommendation.Tier) -> some View {
-        let items = model.recommendations.filter { $0.tier == tier }
-        let total = items.reduce(UInt64(0)) { $0 &+ $1.size }
-
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(tier.label)
-                    .font(.headline)
-                Spacer()
-                Text(total.formattedBytes)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
-
-            ForEach(items) { item in
-                RecommendationRow(item: item, model: model)
-            }
-        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .alternatingRowBackgrounds(.disabled)
     }
 }
 
 private struct RecommendationRow: View {
     let item: Recommendation
     @Bindable var model: AppModel
-    @State private var isHovered = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -78,7 +74,6 @@ private struct RecommendationRow: View {
                     .lineLimit(1)
                 // Location rather than the rationale: titles collide often, and the row
                 // carries a destructive action, so the user needs to know *which* one.
-                // The rationale moves to the tooltip.
                 Text(item.displayPath)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -94,28 +89,20 @@ private struct RecommendationRow: View {
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
 
-            // Revealed on hover to keep a destructive control from sitting under the
-            // pointer during ordinary scanning of the list.
-            if isHovered {
-                Button {
-                    model.trash(item)
-                } label: {
-                    Label("Move to Trash", systemImage: "trash")
-                        .labelStyle(.iconOnly)
-                }
-                .buttonStyle(.borderless)
-                .help("Move to Trash — undo with ⌘Z")
-                .accessibilityLabel("Move \(item.title) to Trash")
+            // Always present rather than revealed on hover. A per-row hover `@State` meant
+            // every pointer movement invalidated rows, which at this list size was a large
+            // part of why the view became unusable.
+            Button {
+                model.trash(item)
+            } label: {
+                Image(systemName: "trash")
             }
+            .buttonStyle(.borderless)
+            .help("Move to Trash — undo with ⌘Z")
+            .accessibilityLabel("Move \(item.title) to Trash")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 9)
-                .fill(isHovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear))
-        )
+        .padding(.vertical, 2)
         .contentShape(.rect)
-        .onHover { isHovered = $0 }
         .contextMenu {
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([
