@@ -79,7 +79,17 @@ final class MoleSession {
 
     func send(_ text: String) { terminal?.send(text) }
 
-    func interrupt() { terminal?.interrupt() }
+    /// Stops the run, escalating if Mole ignores the interrupt.
+    func interrupt() {
+        isStopping = true
+        terminal?.stopEscalating { [weak self] _ in
+            Task { @MainActor in self?.isStopping = false }
+        }
+    }
+
+    /// True between pressing Stop and the process actually exiting, so the button can show
+    /// that escalation is under way rather than looking inert.
+    private(set) var isStopping = false
 
     /// Ends the run and clears the transcript.
     func reset() {

@@ -179,6 +179,61 @@ public final class PseudoTerminal: @unchecked Sendable {
         }
     }
 
+    /// True while the child is still alive.
+    public var isAlive: Bool {
+        lock.lock()
+        let pid = childPID
+        lock.unlock()
+        guard pid > 0 else { return false }
+        // Signal 0 performs the permission and existence checks without sending anything.
+        return kill(pid, 0) == 0
+    }
+
+    /// Stops the child, escalating until it actually exits.
+    ///
+    /// A polite interrupt is not reliably enough. Mole's interface is a Go TUI that installs
+    /// its own SIGINT handler and, in raw mode, may treat Ctrl-C as ordinary input — so the
+    /// Stop button appeared to do nothing even though the signal was being delivered. This
+    /// escalates: interrupt, then SIGTERM, then SIGKILL, checking between each so a process
+    /// that does quit politely is never killed outright.
+    public func stopEscalating(
+        onFinished: @escaping @Sendable (Bool) -> Void = { _ in }
+    ) {
+        interrupt()
+
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) {
+            [weak self] in
+            guard let self else { return }
+            guard self.isAlive else {
+                onFinished(true)
+                return
+            }
+
+            self.signalGroup(SIGTERM)
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) {
+                [weak self] in
+                guard let self else { return }
+                guard self.isAlive else {
+                    onFinished(true)
+                    return
+                }
+                // Cannot be trapped. Reached only when the process ignored both earlier
+                // requests, at which point leaving it running is the worse outcome.
+                self.signalGroup(SIGKILL)
+                onFinished(true)
+            }
+        }
+    }
+
+    private func signalGroup(_ signal: Int32) {
+        lock.lock()
+        let pid = childPID
+        lock.unlock()
+        guard pid > 0 else { return }
+        let group = getpgid(pid)
+        if group > 0 { killpg(group, signal) } else { kill(pid, signal) }
+    }
+
     public func terminate() {
         lock.lock()
         let pid = childPID

@@ -69,8 +69,9 @@ struct MoleCleanupSheet: View {
             Spacer()
 
             if session.isRunning {
-                Button("Stop") { session.interrupt() }
-                    .help("Sends Ctrl-C to Mole and its helpers")
+                Button(session.isStopping ? "Stopping…" : "Stop") { session.interrupt() }
+                    .disabled(session.isStopping)
+                    .help("Interrupts Mole, then forces it to quit if it does not respond")
             }
             if showingTerminal, !session.isRunning {
                 Button {

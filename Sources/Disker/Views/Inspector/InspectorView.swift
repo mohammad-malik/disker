@@ -17,6 +17,8 @@ struct InspectorView: View {
                 }
                 about
                 revealButton
+                Divider().opacity(0.5)
+                scanNotes
             }
             .padding(16)
         }
@@ -88,28 +90,137 @@ struct InspectorView: View {
         }
     }
 
+    /// Facts about the selected item.
+    ///
+    /// This section previously showed scan-wide statistics regardless of what was selected,
+    /// so clicking a file produced a heading with its name above numbers describing the whole
+    /// disk. Those belong to the scan, not the item, and have moved to their own section.
     @ViewBuilder
     private var about: some View {
-        if case .loaded(let result) = model.scanState {
-            VStack(alignment: .leading, spacing: 6) {
+        if let segment = model.selectedSegment ?? model.hoveredSegment {
+            let node = segment.node
+            VStack(alignment: .leading, spacing: 7) {
                 Text("About")
                     .font(.subheadline.weight(.medium))
                     .foregroundStyle(.secondary)
 
-                Text("\(result.root.fileCount.formatted()) files, scanned in \(String(format: "%.1fs", result.duration)).")
+                detailRow("Kind", kindDescription(node))
+                detailRow("Category", segment.category.rawValue)
+
+                if node.isDirectory {
+                    detailRow("Contains", "\(node.fileCount.formatted()) files")
+                    if !node.children.isEmpty {
+                        detailRow("Direct items", "\(node.children.count)")
+                    }
+                }
+
+                if let accessed = node.accessTime {
+                    detailRow("Last opened", relative(accessed))
+                } else if node.kind == .file {
+                    // Distinguishes "never opened" from "the filesystem doesn't record it",
+                    // which matters because the recommendations refuse to guess either way.
+                    detailRow("Last opened", "Not recorded")
+                }
+
+                if node.flags.contains(.deduplicated) {
+                    Label(
+                        "Shares storage with another file — counted once, so removing this "
+                            + "alone frees nothing.",
+                        systemImage: "link"
+                    )
                     .font(.caption)
                     .foregroundStyle(.secondary)
-
-                // Both caveats change how the headline number should be read, so they belong
-                // on screen rather than buried in a log.
-                if result.deduplicatedBytes > 0 {
-                    Text("\(result.deduplicatedBytes.formattedBytes) shared by hardlinks or clones, counted once.")
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                if node.flags.contains(.inaccessible) {
+                    Label("Could not be read during the scan.", systemImage: "lock.fill")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.orange)
+                }
+                if node.kind == .aggregate {
+                    Label(
+                        "Stands for many small files grouped together. Open the folder in "
+                            + "Finder to act on them individually.",
+                        systemImage: "square.stack.3d.up"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Text("Location")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 2)
+                Text(model.absolutePath(for: segment))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(4)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func detailRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.caption)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func kindDescription(_ node: FileNode) -> String {
+        switch node.kind {
+        case .directory: return "Folder"
+        case .symlink: return "Symbolic link"
+        case .aggregate: return "Grouped items"
+        case .file:
+            let ext = (node.name as NSString).pathExtension
+            return ext.isEmpty ? "File" : "\(ext.uppercased()) file"
+        }
+    }
+
+    private func relative(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    /// Scan-wide caveats. Kept separate from About because they describe the measurement,
+    /// not whatever happens to be selected — and each one changes how the headline total
+    /// should be read, so they stay on screen rather than in a log.
+    @ViewBuilder
+    private var scanNotes: some View {
+        if case .loaded(let result) = model.scanState {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("This Scan")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.secondary)
+
+                Text(
+                    "\(result.root.fileCount.formatted()) files, scanned in "
+                        + "\(String(format: "%.1fs", result.duration))."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if result.deduplicatedBytes > 0 {
+                    Text(
+                        "\(result.deduplicatedBytes.formattedBytes) shared by hardlinks or "
+                            + "clones, counted once."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 if result.inaccessibleCount > 0 {
                     Label(
-                        "\(result.inaccessibleCount) folders could not be read — the total is a lower bound. Grant Full Disk Access for a complete picture.",
+                        "\(result.inaccessibleCount) folders could not be read — the total is "
+                            + "a lower bound. Grant Full Disk Access for a complete picture.",
                         systemImage: "lock.fill"
                     )
                     .font(.caption)

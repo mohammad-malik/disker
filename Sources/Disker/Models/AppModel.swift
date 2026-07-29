@@ -300,6 +300,11 @@ final class AppModel {
     }
 
     /// Jumps the chart to a top-level folder.
+    ///
+    /// Deliberately leaves `section` alone. Setting it back to `.overview` here would fight
+    /// the sidebar selection that triggered this, so the highlight would snap away from the
+    /// location the user just picked. The detail view renders `.location` and `.overview`
+    /// identically — the difference is only which row stays selected.
     func openLocation(named name: String) {
         guard case .loaded(let result) = scanState,
             let node = result.root.children.first(where: { $0.name == name })
@@ -308,7 +313,6 @@ final class AppModel {
         selectedSegment = nil
         hoveredSegment = nil
         rebuildSegments()
-        section = .overview
     }
 
     /// Asks before moving a scanned item to the Trash.

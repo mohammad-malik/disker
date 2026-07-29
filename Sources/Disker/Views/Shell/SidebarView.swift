@@ -4,43 +4,106 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var model: AppModel
 
+    /// Rows are buttons rather than `List` selection.
+    ///
+    /// Tag-based selection did not drive navigation here — clicks landed on the row and the
+    /// detail view never changed, which is exactly the "they do nothing but show a size"
+    /// symptom. Rather than keep guessing at why SwiftUI declined to write the binding back,
+    /// each row now sets the section directly. Behaviour is explicit and the highlight is
+    /// drawn to match a standard source list.
     var body: some View {
         VStack(spacing: 0) {
-            List(selection: $model.section) {
-                Section {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(AppModel.Section.fixed) { item in
-                        Label(item.title, systemImage: item.symbolName)
-                            .tag(item)
-                            .badge(badge(for: item))
-                    }
-                }
-
-                Section("Locations") {
-                    // Selecting one opens that folder in the chart. Previously these were
-                    // inert labels that looked like navigation and did nothing.
-                    ForEach(topLevelLocations, id: \.name) { location in
-                        HStack {
-                            Label(location.name, systemImage: location.symbol)
-                            Spacer()
-                            Text(location.size.formattedBytes)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
+                        SidebarRow(
+                            title: item.title,
+                            symbol: item.symbolName,
+                            trailing: badge(for: item),
+                            isSelected: model.section == item
+                        ) {
+                            model.section = item
                         }
-                        .tag(AppModel.Section.location(location.name))
+                    }
+
+                    Text("Locations")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .padding(.top, 14)
+                        .padding(.bottom, 3)
+
+                    ForEach(topLevelLocations, id: \.name) { location in
+                        let section = AppModel.Section.location(location.name)
+                        SidebarRow(
+                            title: location.name,
+                            symbol: location.symbol,
+                            trailing: location.size.formattedBytes,
+                            isSelected: model.section == section
+                        ) {
+                            model.section = section
+                            model.openLocation(named: location.name)
+                        }
                     }
                 }
+                .padding(.horizontal, 8)
+                .padding(.top, 8)
             }
-            .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .onChange(of: model.section) { _, newValue in
-                if case .location(let name) = newValue {
-                    model.openLocation(named: name)
-                }
-            }
 
             FreeSpaceCard(volume: model.volume)
                 .padding(12)
+        }
+    }
+
+    /// One source-list row: icon, title, optional trailing value, selection highlight.
+    private struct SidebarRow: View {
+        let title: String
+        let symbol: String
+        let trailing: String?
+        let isSelected: Bool
+        let action: () -> Void
+
+        @State private var isHovered = false
+
+        var body: some View {
+            Button(action: action) {
+                HStack(spacing: 7) {
+                    Image(systemName: symbol)
+                        .frame(width: 18)
+                        .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.tint))
+                    Text(title)
+                        .lineLimit(1)
+                        .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    Spacer(minLength: 6)
+                    if let trailing {
+                        Text(trailing)
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(
+                                isSelected
+                                    ? AnyShapeStyle(.white.opacity(0.85))
+                                    : AnyShapeStyle(.secondary))
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(background)
+                )
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .onHover { isHovered = $0 }
+            .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
+        }
+
+        private var background: AnyShapeStyle {
+            if isSelected { return AnyShapeStyle(.tint) }
+            if isHovered { return AnyShapeStyle(.quaternary) }
+            return AnyShapeStyle(.clear)
         }
     }
 

@@ -29,39 +29,47 @@ struct SunburstView: View {
                             highlighted: isActive)
                     }
                 }
-                .onContinuousHover(coordinateSpace: .local) { phase in
-                    switch phase {
-                    case .active(let location):
-                        let offset = (
-                            x: Double(location.x - center.x), y: Double(location.y - center.y)
-                        )
-                        model.hoveredSegment = SunburstLayout.segment(
-                            at: offset, in: model.segments,
-                            innerRadius: Double(innerRadius), ringWidth: Double(ringWidth))
-                    case .ended:
-                        model.hoveredSegment = nil
-                    }
-                }
-                // Double-click drills in; single click only selects.
-                //
-                // These were the same gesture before, so a folder could never be selected —
-                // clicking one to delete it opened it instead, and there was no way to act
-                // on a directory at all. Registered before the single-tap handler so SwiftUI
-                // gives the double-click priority.
-                .onTapGesture(count: 2) { location in
-                    guard let hit = segment(at: location, center: center,
-                        innerRadius: innerRadius, ringWidth: ringWidth) else { return }
-                    guard hit.node.isDirectory, !hit.node.children.isEmpty else { return }
-                    withAnimation(
-                        reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85)
-                    ) {
-                        model.drillDown(into: hit.node)
-                    }
-                }
-                .onTapGesture { location in
-                    model.selectedSegment = segment(
-                        at: location, center: center,
-                        innerRadius: innerRadius, ringWidth: ringWidth)
+                // All pointer handling goes through AppKit. SwiftUI's tap gestures delay a
+                // single click until the double-click interval elapses, which made every
+                // selection feel sluggish; clickCount on mouse-down has no such wait.
+                .overlay {
+                    ClickCatcher(
+                        onClick: { location, count in
+                            let hit = segment(
+                                at: location, center: center,
+                                innerRadius: innerRadius, ringWidth: ringWidth)
+                            if count >= 2 {
+                                guard let hit, hit.node.isDirectory, !hit.node.children.isEmpty
+                                else { return }
+                                withAnimation(
+                                    reduceMotion
+                                        ? nil : .spring(response: 0.4, dampingFraction: 0.85)
+                                ) {
+                                    model.drillDown(into: hit.node)
+                                }
+                            } else {
+                                model.selectedSegment = hit
+                            }
+                        },
+                        onRightClick: { location in
+                            // Select what was right-clicked so the menu and the inspector
+                            // agree about the target.
+                            if let hit = segment(
+                                at: location, center: center,
+                                innerRadius: innerRadius, ringWidth: ringWidth)
+                            {
+                                model.selectedSegment = hit
+                            }
+                        },
+                        onMove: { location in
+                            guard let location else {
+                                model.hoveredSegment = nil
+                                return
+                            }
+                            model.hoveredSegment = segment(
+                                at: location, center: center,
+                                innerRadius: innerRadius, ringWidth: ringWidth)
+                        })
                 }
 
                 hub(radius: innerRadius)
