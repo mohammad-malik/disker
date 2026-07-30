@@ -81,6 +81,52 @@ struct TerminalEmulatorTests {
         #expect(emulator.plainText() == "two\nthree\nfour")
     }
 
+    @Test("Lines scrolled off the top are kept as history")
+    func scrollbackRetainsHistory() {
+        let emulator = TerminalEmulator(rows: 3, columns: 20)
+        feed(emulator, "one\r\ntwo\r\nthree\r\nfour\r\nfive")
+
+        // The live screen still shows only the last three lines...
+        #expect(emulator.plainText() == "three\nfour\nfive")
+
+        // ...but nothing is lost. Without this, `mole clean` prints far more than a
+        // screenful and everything above it was discarded as it arrived, leaving the
+        // surrounding ScrollView with nothing to scroll.
+        let all = emulator.displayLines().map { String($0.map(\.character)).trimmingCharacters(in: .whitespaces) }
+        #expect(all == ["one", "two", "three", "four", "five"])
+    }
+
+    @Test("History is bounded")
+    func scrollbackIsBounded() {
+        let rows = 3
+        let emulator = TerminalEmulator(rows: rows, columns: 10)
+        for index in 0..<20000 {
+            feed(emulator, "line\(index)\r\n")
+        }
+        // A long-running command must not grow memory without limit. The cap is the 5000-line
+        // limit plus one trim chunk of slack plus the live screen: trimming a single line per
+        // overflow shifts the whole buffer every time, which is quadratic and took the suite
+        // from 9s to 47s, so the excess is dropped in batches instead.
+        #expect(emulator.displayLines().count <= 5000 + 512 + rows)
+        // ...and the limit is actually reached, so this is a real cap rather than a buffer
+        // that simply never filled.
+        #expect(emulator.displayLines().count >= 5000)
+    }
+
+    @Test("Full-screen redraws do not accumulate as history")
+    func alternateScreenIsNotRecorded() {
+        let emulator = TerminalEmulator(rows: 4, columns: 30)
+        feed(emulator, "\u{1B}[?1049h")
+        for frame in 1...20 {
+            feed(emulator, "\u{1B}[H\u{1B}[2JFrame \(frame)\r\n")
+        }
+        // Scrolling back through a menu should not show every intermediate repaint.
+        let text = emulator.displayLines()
+            .map { String($0.map(\.character)).trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        #expect(text == ["Frame 20"])
+    }
+
     @Test("Escape sequences split across reads still work")
     func splitSequences() {
         let emulator = TerminalEmulator(rows: 5, columns: 20)

@@ -11,6 +11,13 @@ import SwiftUI
 @Observable
 final class MoleSession {
     private(set) var cells: [[TerminalCell]] = []
+    /// Bumped on every chunk of output.
+    ///
+    /// The view follows the tail on changes to this rather than to `cells.count`, which stops
+    /// changing once scrollback reaches its cap even though output is still arriving — so
+    /// following would quietly stop during exactly the long runs it exists for. It also misses
+    /// progress lines that rewrite in place without adding a row.
+    private(set) var revision = 0
     private(set) var state: PseudoTerminal.State = .idle
     /// What produced the output currently on screen.
     private(set) var configuration: MoleConfiguration?
@@ -52,7 +59,7 @@ final class MoleSession {
         // nothing is reading.
         terminal?.terminate()
         emulator = TerminalEmulator(rows: 34, columns: 110)
-        cells = emulator.snapshot()
+        cells = emulator.displayLines()
         self.configuration = configuration
         startedAt = Date()
 
@@ -61,7 +68,10 @@ final class MoleSession {
                 Task { @MainActor in
                     guard let self else { return }
                     self.emulator.feed(data)
-                    self.cells = self.emulator.snapshot()
+                    // Scrollback plus the live screen, so output longer than one screenful
+                    // stays readable instead of scrolling into nothing.
+                    self.cells = self.emulator.displayLines()
+                    self.revision &+= 1
                 }
             },
             onStateChange: { [weak self] newState in

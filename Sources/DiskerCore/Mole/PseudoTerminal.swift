@@ -69,6 +69,26 @@ public final class PseudoTerminal: @unchecked Sendable {
         if pid == 0 {
             // Child. Only async-signal-safe work belongs here; anything that allocates or
             // takes a lock can deadlock against state held by the parent at fork time.
+
+            // Hand the child a clean signal environment.
+            //
+            // This is not housekeeping — without it `mole clean` stalls for exactly five
+            // minutes. launchd starts GUI applications with SIGTERM set to SIG_IGN, and
+            // unlike installed handlers (which exec resets to SIG_DFL) an *ignored*
+            // disposition survives execve. Mole wraps its Cloud & Office pass in a shell
+            // timeout that spawns a `sleep 300` watchdog, then kills that watchdog and waits
+            // on it once the work finishes. Inheriting the ignore made those kills no-ops, so
+            // the wait ran the full 300 seconds — output stopped dead after "Cloud & Office"
+            // and the window looked frozen. Measured: 375s with the ignore inherited, 81s
+            // without. It also silently defeated terminate(), which is how a dry run was
+            // found still running a day later.
+            //
+            // A blocked signal mask is inherited too, so clear that as well.
+            for number in 1..<Int32(NSIG) { signal(number, SIG_DFL) }
+            var empty = sigset_t()
+            sigemptyset(&empty)
+            sigprocmask(SIG_SETMASK, &empty, nil)
+
             var env = ProcessInfo.processInfo.environment
             for (key, value) in environment { env[key] = value }
             // Declaring a capable terminal keeps colours and cursor addressing switched on.

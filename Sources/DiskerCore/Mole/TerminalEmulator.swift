@@ -49,6 +49,25 @@ public final class TerminalEmulator: @unchecked Sendable {
     private var current = TerminalCell()
     private let lock = NSLock()
 
+    /// Lines that have scrolled off the top.
+    ///
+    /// Without this the emulator was a fixed viewport: `mole clean` prints well over a
+    /// screenful, so everything above the last 34 lines was discarded as it arrived and the
+    /// surrounding ScrollView had nothing to scroll. History has to be retained, not just
+    /// displayed.
+    private var scrollback: [[TerminalCell]] = []
+
+    /// Bounded so a long-running command cannot grow memory without limit.
+    private let scrollbackLimit = 5000
+    /// Slack before trimming, so the cost is amortised rather than paid per line.
+    private static let trimChunk = 512
+
+    /// True while a full-screen TUI is drawing.
+    ///
+    /// Those programs redraw in place, so their frames must not accumulate as history —
+    /// scrolling back through a menu would otherwise show every intermediate repaint.
+    private var inAlternateScreen = false
+
     /// Bytes that arrived mid-sequence and need the next chunk to complete.
     private var pending: [UInt8] = []
     private var utf8Buffer: [UInt8] = []
@@ -60,10 +79,26 @@ public final class TerminalEmulator: @unchecked Sendable {
             repeating: Array(repeating: TerminalCell.blank, count: columns), count: rows)
     }
 
+    /// The live screen only.
     public func snapshot() -> [[TerminalCell]] {
         lock.lock()
         defer { lock.unlock() }
         return grid
+    }
+
+    /// Scrollback followed by the live screen — what the view renders.
+    ///
+    /// Trailing blank rows are trimmed so a mostly-empty screen does not leave a large gap
+    /// under the last line of output.
+    public func displayLines() -> [[TerminalCell]] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var lines = scrollback + grid
+        while let last = lines.last, last.allSatisfy({ $0.character == " " }) {
+            lines.removeLast()
+        }
+        return lines
     }
 
     /// Rendered text, trailing blank lines removed.
@@ -166,7 +201,17 @@ public final class TerminalEmulator: @unchecked Sendable {
     private func lineFeed() {
         cursorRow += 1
         if cursorRow >= rows {
-            grid.removeFirst()
+            let departing = grid.removeFirst()
+            // Only a streaming program's output is history worth keeping.
+            if !inAlternateScreen {
+                scrollback.append(departing)
+                // Trimmed in batches. Removing one line per overflow shifts the whole buffer
+                // every time, which is quadratic over a long run — enough to be measurable
+                // on a command that prints thousands of lines.
+                if scrollback.count > scrollbackLimit + Self.trimChunk {
+                    scrollback.removeFirst(scrollback.count - scrollbackLimit)
+                }
+            }
             grid.append(Array(repeating: TerminalCell.blank, count: columns))
             cursorRow = rows - 1
         }
@@ -266,10 +311,16 @@ public final class TerminalEmulator: @unchecked Sendable {
             eraseLine(mode: values.first ?? 0)
         case "m":
             applyGraphicRendition(values.isEmpty ? [0] : values)
-        case "h" where isPrivate, "l" where isPrivate:
-            // Alternate screen / cursor visibility. Entering the alternate buffer should
-            // start from a clean screen, which is what makes a full-screen redraw look right.
+        case "h" where isPrivate:
+            // Entering the alternate buffer starts from a clean screen, and its repaints are
+            // kept out of history.
             if values.contains(1049) || values.contains(47) {
+                inAlternateScreen = true
+                clearAll()
+            }
+        case "l" where isPrivate:
+            if values.contains(1049) || values.contains(47) {
+                inAlternateScreen = false
                 clearAll()
             }
         case "s":

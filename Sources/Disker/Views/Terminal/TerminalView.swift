@@ -104,14 +104,53 @@ struct TerminalKeyCatcher: NSViewRepresentable {
 
     final class KeyView: NSView {
         var onKey: ((String) -> Void)?
+        private var clickMonitor: Any?
 
         override var acceptsFirstResponder: Bool { true }
         /// Takes focus on the first click rather than requiring a second.
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
+        /// Stays out of the way of the mouse entirely.
+        ///
+        /// This view is layered over the transcript to catch keys, and while it was
+        /// hit-testable the window handed it every mouse event first — including the wheel,
+        /// which NSView forwards up the responder chain to the containing view rather than
+        /// across to the scroll view beside it. Scrolling over the output did nothing, so a
+        /// long run could not be read past the last screenful. Key events go to the first
+        /// responder regardless of hit testing, so declining mouse events costs nothing here;
+        /// the click monitor below keeps click-to-focus working.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
+            if window == nil {
+                // Torn down here rather than in deinit, which is nonisolated and so cannot
+                // touch main-actor state. AppKit always moves a view out of its window before
+                // releasing it, so this is the reliable place to unhook.
+                if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+                clickMonitor = nil
+                return
+            }
             claimFocus()
+            installClickMonitor()
+        }
+
+        /// Restores click-to-focus now that the view itself is invisible to the mouse.
+        ///
+        /// Clicking the transcript moves first responder to the scroll view, which would
+        /// silently stop keys reaching Mole — the failure that made its "Enter to continue"
+        /// prompt look broken. Watching for clicks that land in this view's bounds takes the
+        /// focus back without intercepting the event.
+        private func installClickMonitor() {
+            guard clickMonitor == nil, window != nil else { return }
+            clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) {
+                [weak self] event in
+                guard let self, let window = self.window, event.window === window
+                else { return event }
+                let point = self.convert(event.locationInWindow, from: nil)
+                if self.bounds.contains(point) { self.claimFocus() }
+                return event
+            }
         }
 
         /// Re-asserts first responder.
@@ -126,11 +165,6 @@ struct TerminalKeyCatcher: NSViewRepresentable {
                 guard let self, self.window != nil else { return }
                 window.makeFirstResponder(self)
             }
-        }
-
-        // Clicking the terminal focuses it, the same as clicking into any text area.
-        override func mouseDown(with event: NSEvent) {
-            window?.makeFirstResponder(self)
         }
 
         override func keyDown(with event: NSEvent) {

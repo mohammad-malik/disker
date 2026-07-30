@@ -12,6 +12,9 @@ struct MoleCleanupSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var confirmingDestructive = false
+    /// Keeps the newest output in view. Turned off while the user is reading history so the
+    /// view does not yank them back to the bottom mid-scroll.
+    @State private var followTail = true
 
     /// Shows the terminal when a run exists, otherwise the options form. Backed by the model
     /// so a run started from outside this sheet's own buttons still brings the terminal
@@ -69,6 +72,22 @@ struct MoleCleanupSheet: View {
                 Text(statusText).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+
+            if showingTerminal {
+                // Auto-scrolling has to be interruptible: while Mole is still printing, an
+                // unconditional jump to the bottom makes earlier output impossible to read.
+                Button {
+                    followTail.toggle()
+                } label: {
+                    Label(
+                        followTail ? "Following" : "Follow",
+                        systemImage: followTail ? "arrow.down.to.line.compact" : "pause")
+                }
+                .help(
+                    followTail
+                        ? "Keeping the newest output in view — click to stop and scroll freely"
+                        : "Scroll back through the output — click to follow the newest again")
+            }
 
             if session.isRunning {
                 Button(session.isStopping ? "Stopping…" : "Stop") { session.interrupt() }
@@ -281,9 +300,18 @@ struct MoleCleanupSheet: View {
 
     private var terminal: some View {
         ZStack {
-            ScrollView([.vertical, .horizontal]) {
-                TerminalScreenView(cells: session.cells, fontSize: 11.5)
-                    .padding(10)
+            ScrollViewReader { proxy in
+                ScrollView([.vertical, .horizontal]) {
+                    TerminalScreenView(cells: session.cells, fontSize: 11.5)
+                        .padding(10)
+                    // Anchor for following the output; scrolling up to read history still
+                    // works, this only keeps the newest line in view as it arrives.
+                    Color.clear.frame(height: 1).id(Self.bottomAnchor)
+                }
+                .onChange(of: session.revision) { _, _ in
+                    guard followTail else { return }
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
             }
             .background(.black.opacity(0.5))
 
@@ -294,6 +322,8 @@ struct MoleCleanupSheet: View {
             TerminalKeyCatcher { session.send($0) }
         }
     }
+
+    private static let bottomAnchor = "terminal-bottom"
 
     // MARK: - Footer
 
