@@ -1,136 +1,107 @@
 # Disker
 
-A macOS disk analyzer with a Liquid Glass interface, an interactive sunburst, and one-button
-cleanup through [Mole](https://github.com/tw93/mole).
+**Find out where your disk space went, and get it back.**
+
+Disker measures everything on your Mac and draws it as a chart you can click through, so the
+thing quietly eating 40 GB is obvious in a couple of clicks instead of buried ten folders deep.
+Then it points out what is actually safe to delete.
 
 ![Disker showing a full-volume scan as a sunburst chart](docs/screenshot.png)
 
-## What it does
+## What you get
 
-- **Scans a whole volume fast** using `getattrlistbulk(2)`, reporting bytes actually on disk
-  rather than logical size.
-- **Draws the result as a sunburst** — click a wedge to drill in, hover for detail, with an
-  inspector showing the largest items beneath any node.
-- **Suggests what to clean**, tiered by how safe it is, and never acts on its own.
-- **Runs Mole in-app** in a real terminal emulator, so its prompts (including sudo) work
-  without leaving the window.
+- **A picture of your whole disk.** Every folder sized in one pass, drawn as a sunburst where
+  the size of a slice is the space it uses.
+- **Click to explore.** Click any slice to zoom into it, and the panel on the right shows what
+  is biggest inside. Follow the breadcrumb back out.
+- **Suggestions you can trust.** Caches, build leftovers, old installers — sorted by how safe
+  they are to remove, with the risky ones marked for review rather than mixed in.
+- **One-button cleanup.** Hand the job to [Mole](https://github.com/tw93/mole) without leaving
+  the window, or delete things yourself. Everything goes to the Trash, and ⌘Z puts it back.
 
 ## Install
 
-Download the latest build from
-[Releases](https://github.com/mohammad-malik/disker/releases/latest), unzip, and drag
-`Disker.app` to `/Applications`.
+1. **[Download the latest release](https://github.com/mohammad-malik/disker/releases/latest)**
+   and unzip it.
+2. Drag `Disker.app` to your Applications folder.
+3. **Right-click it and choose Open** the first time. A normal double-click will be refused —
+   the app isn't notarised by Apple, so macOS asks once. After that it opens normally.
 
-The release is ad-hoc signed rather than notarised, so the **first launch needs a right-click →
-Open** instead of a double-click. Full instructions, including Full Disk Access, are in
-[docs/INSTALL.md](docs/INSTALL.md).
+You'll also want to give it **Full Disk Access** in System Settings, or it can't see everything
+and will tell you its total is incomplete.
 
-Requires **macOS 26 (Tahoe)** on **Apple Silicon**. Or [build it yourself](#building) — two
-commands, no Apple developer account needed.
+[Full instructions →](docs/INSTALL.md)
 
-## Requirements
+**Needs macOS 26 (Tahoe) on an Apple Silicon Mac.** Cleanup uses
+[Mole](https://github.com/tw93/mole) (`brew install mole`), which is optional — everything else
+works without it.
 
-- macOS 26 (Tahoe) — the Liquid Glass APIs are used directly, with no fallback path.
-- Apple Silicon. The release build is `arm64` only.
-- Command Line Tools for Xcode, to build from source. **Xcode itself is not required**; the app
-  bundle is assembled by hand in `Tools/bundle.sh`.
-- [Mole](https://github.com/tw93/mole) (`brew install mole`) — optional. Without it the
-  scanner and chart work normally and the cleanup features report that it is missing.
+## Using it
 
-## Building
+Disker scans your startup disk when you open it, which takes about a minute the first time and
+is remembered afterwards.
+
+- **Click a slice** to zoom in; use the breadcrumb at the top to come back out.
+- **Switch disks** with the drive button in the toolbar.
+- **Recommendations** in the sidebar groups what's worth removing by how safe it is, with the
+  biggest wins at the top of each group.
+- **Clean with Mole** opens the cleanup options. Start with **Preview** — it shows exactly what
+  would be removed without touching anything.
+
+## Is it going to delete something important?
+
+Not on its own. Disker never removes anything unless you tell it to, and there is no
+"clean everything" button that runs without showing you the list first.
+
+When you do delete something:
+
+- **It goes to the Trash**, not straight to oblivion. ⌘Z undoes it.
+- **Installed software is never suggested.** Disker knows the difference between a project's
+  `node_modules` and the folder your globally installed command-line tools live in, and won't
+  offer the latter.
+- **It won't touch the inside of an app.** Nothing within a `.app` is ever offered for deletion.
+- **It respects your Mole whitelist**, so anything you've already told Mole to protect stays
+  protected.
+
+If you'd rather not run a downloaded binary that reads your entire disk — a fair position —
+[build it from source](#building-from-source). It takes two commands and no Apple developer
+account.
+
+## Building from source
+
+You need the Command Line Tools for Xcode. Xcode itself is not required.
 
 ```sh
-./Tools/create-signing-identity.sh   # once — see "Full Disk Access" below
+./Tools/create-signing-identity.sh   # once, so Full Disk Access survives rebuilds
 ./Tools/bundle.sh                    # produces build/Disker.app
 ./Tools/test.sh                      # runs the test suite
 open build/Disker.app
 ```
 
-`Tools/release.sh <version>` produces the distributable zip. It signs ad-hoc rather than with
-your local identity, because that certificate is trusted only in the keychain that created it —
-elsewhere the bundle fails validation and Finder calls the app damaged.
+## Documentation
 
-### Full Disk Access
-
-A disk analyzer that cannot read protected directories reports numbers that are quietly too
-low, so Disker detects the situation and says so rather than showing a wrong total. Grant
-access under **System Settings → Privacy & Security → Full Disk Access**.
-
-macOS keys that grant to code signing identity. Ad-hoc signatures change on every build, which
-would revoke the grant each time you rebuild — `Tools/create-signing-identity.sh` creates one
-self-signed certificate and `bundle.sh` signs with it, so the grant survives.
-
-## Layout
-
-| Target       | What it is                                                                    |
-| ------------ | ----------------------------------------------------------------------------- |
-| `DiskerCore` | Scanning, analysis, and Mole integration. No SwiftUI, so it is testable headlessly. |
-| `Disker`     | The SwiftUI app.                                                              |
-| `diskerctl`  | A headless harness for cross-checking the scanner against `du` and `df`.       |
-
-```sh
-swift run diskerctl scan ~/Documents --depth 2
-swift run diskerctl volumes
-swift run diskerctl recommend
-swift run diskerctl mole
-```
-
-## Safety
-
-Deleting the wrong thing is the failure mode that matters for a tool like this, so the rules
-are explicit:
-
-- Everything removed goes through `FileManager.trashItem` and registers with `UndoManager`. No
-  code path calls `unlink`, `removeItem`, or `rm -rf`.
-- Installed software is never suggested for deletion — global package-manager roots
-  (`/opt/homebrew/lib/node_modules`, `~/.bun/install/global`, nvm/volta/asdf/rbenv/pyenv
-  versions, Homebrew's Cellar, and others) are excluded. An early version offered to delete the
-  directory containing globally installed CLI tools, which would have uninstalled them.
-- Nothing inside an app bundle is offered, so a `node_modules` vendored inside a `.app` is left
-  alone.
-- Your Mole whitelist at `~/.config/mole/whitelist` is honoured.
-
-Being a parent of protected content is deliberately *not* treated as a reason to stop walking a
-directory — conflating the two once pruned the entire home directory from the results.
-
-## Notes on the implementation
-
-A few things that are less obvious than they look:
-
-- **APFS volume groups report identical `st_dev`.** The usual `du -x` trick for staying on one
-  filesystem does not work on modern macOS, and following firmlinks double-counts the volume —
-  which is how an early build reported 427 GB used on a 228 GB disk. Boundaries come from
-  `/usr/share/firmlinks` and `getmntinfo(3)` instead.
-- **Hardlinks and APFS clones are counted once**, keyed on `(device, fileID)` and tracked only
-  for entries with a link count above one.
-- **Mole needs a pty, not a pipe** — it checks `isatty` and will not prompt otherwise. Disker
-  runs it under `forkpty(3)` with a VT100 emulator, because Mole redraws in place and simply
-  stripping ANSI escapes stacks every frame on top of the last.
-- **Children are given default signal dispositions before `exec`.** launchd starts GUI apps
-  with `SIGTERM` set to `SIG_IGN`, and an ignored disposition survives `execve`. Inheriting it
-  made `mole clean` stall for exactly 300 seconds mid-run and left orphaned processes that no
-  `SIGTERM` could reach.
+| | |
+| --- | --- |
+| [Installing](docs/INSTALL.md) | Requirements, first launch, Full Disk Access, uninstalling |
+| [How it works](docs/ARCHITECTURE.md) | Architecture and implementation notes for contributors |
+| [Third-party software](docs/THIRD-PARTY.md) | Mole's licence and where the boundary sits |
+| [Changelog](CHANGELOG.md) | What changed in each release |
 
 ## Status
 
-Early but working end to end: scanning, the chart, recommendations, in-app deletion with undo,
-and the full Mole configuration and run flow. Treemap view, search, and duplicate detection are
-not implemented.
+Working end to end: scanning, the chart, recommendations, deletion with undo, and the full Mole
+configuration and run flow. Treemap view, search, and duplicate detection are not built yet.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE.md) — **free for any noncommercial purpose, not for
-profit.** Personal use, hobby projects, research, education, and use by nonprofit and
-government organizations are all permitted, including modifying and redistributing it. Selling
-it, or using it as part of a commercial product or service, is not.
+[PolyForm Noncommercial 1.0.0](LICENSE.md) — **free for any noncommercial purpose, but not for
+profit.** Personal use, hobby projects, research, education, and use by nonprofit and government
+organizations are all fine, including changing it and sharing it. Selling it, or building it
+into a commercial product or service, is not.
 
-This is deliberately not an open-source license by the OSI definition, since it restricts who
-may use the software and for what.
+This is deliberately not an open-source licence by the OSI definition, since it limits who may
+use the software and for what.
 
-### Mole
-
-[Mole](https://github.com/tw93/mole) is GPL-3.0-or-later, but Disker neither includes nor
-distributes it — it runs an existing `mole` on your `PATH` as a separate process and reads its
-output. That is the FSF's own textbook case of two separate programs, so Mole's copyleft does
-not extend to Disker. [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md) sets out the reasoning and the
-two changes that would break it, neither of which is true today.
+[Mole](https://github.com/tw93/mole) is GPL-3.0-or-later, and Disker neither includes nor
+distributes it — it runs the copy on your own machine as a separate program. See
+[docs/THIRD-PARTY.md](docs/THIRD-PARTY.md).
