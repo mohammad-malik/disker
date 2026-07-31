@@ -42,6 +42,8 @@ let arguments = CommandLine.arguments
 
 guard arguments.count >= 2 else {
     print("usage: diskerctl scan <path> [--depth N]")
+    print("       diskerctl volumes")
+    print("       diskerctl recommend")
     print("       diskerctl mole")
     exit(1)
 }
