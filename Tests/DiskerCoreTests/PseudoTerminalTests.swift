@@ -12,49 +12,59 @@ import Testing
 /// that pass in a shell timeout, kills the `sleep` watchdog with SIGTERM when the work
 /// finishes, then waits on it. With the kill ignored the wait ran the full 300 seconds and the
 /// window looked frozen. Measured through this class: 375s with the ignore, 70-87s without.
+///
+/// These tests are deliberately synchronous. `pthread_sigmask` applies to the calling thread
+/// only, so both the mask change and the fork have to happen on the same one — an `async` test
+/// can hop threads at any suspension point, which made an earlier version of this suite both
+/// flaky and not actually exercising the mask.
 @Suite("Pseudo-terminal")
 struct PseudoTerminalTests {
 
-    /// Runs a command to completion and returns everything it printed.
-    private func run(_ arguments: [String], timeout: TimeInterval = 20) async -> String {
+    /// Runs a shell command and waits until its output satisfies `until`, or the timeout.
+    ///
+    /// Waiting for the process to exit instead would race: the child is reaped on one queue
+    /// while the pty is still being drained on another, so the transcript can still be empty
+    /// when the exit callback lands.
+    private func run(
+        _ script: String,
+        until satisfied: (String) -> Bool,
+        timeout: TimeInterval = 20
+    ) -> String {
         let collected = Collected()
         let terminal = PseudoTerminal(
-            onOutput: { data in collected.append(data) },
-            onStateChange: { state in
-                if case .finished = state { collected.finish() }
-                if case .failed = state { collected.finish() }
-            })
+            onOutput: { collected.append($0) },
+            onStateChange: { _ in })
 
-        Task.detached {
-            terminal.start(
-                executable: "/bin/sh", arguments: arguments, columns: 80, rows: 24)
-        }
+        // Called inline rather than dispatched, so the child inherits this thread's mask.
+        terminal.start(
+            executable: "/bin/sh", arguments: ["-c", script], columns: 80, rows: 24)
 
         let deadline = Date().addingTimeInterval(timeout)
-        while !collected.isFinished && Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(50))
+        while Date() < deadline && !satisfied(collected.text) {
+            Thread.sleep(forTimeInterval: 0.02)
         }
         terminal.terminate()
         return collected.text
     }
 
+    /// A shell that inherits SIGTERM as SIG_IGN silently refuses to trap it, so signalling
+    /// itself does nothing and only READY is printed. With the disposition reset the trap
+    /// installs and fires, so CAUGHT appears too.
+    private static let trapProbe = "trap 'echo CAUGHT' TERM; kill -TERM $$; sleep 1; echo READY"
+
     @Test("The child does not inherit an ignored SIGTERM")
-    func childGetsDefaultSignalDispositions() async {
-        // Stand in for launchd: ignore SIGTERM in this process before forking.
+    func childGetsDefaultSignalDispositions() {
         let previous = signal(SIGTERM, SIG_IGN)
         defer { signal(SIGTERM, previous) }
 
-        // A shell that inherits SIG_IGN silently refuses to trap the signal, so `kill` on
-        // itself does nothing and only ALIVE is printed. With the disposition reset the trap
-        // installs and fires, so CAUGHT appears first.
-        let output = await run(["-c", "trap 'echo CAUGHT' TERM; kill -TERM $$; echo ALIVE"])
+        let output = run(Self.trapProbe, until: { $0.contains("READY") })
 
         #expect(output.contains("CAUGHT"))
-        #expect(output.contains("ALIVE"))
+        #expect(output.contains("READY"))
     }
 
     @Test("The child does not inherit a blocked signal mask")
-    func childGetsAnEmptySignalMask() async {
+    func childGetsAnEmptySignalMask() {
         var blocked = sigset_t()
         sigemptyset(&blocked)
         sigaddset(&blocked, SIGTERM)
@@ -62,14 +72,14 @@ struct PseudoTerminalTests {
         defer { pthread_sigmask(SIG_UNBLOCK, &blocked, nil) }
 
         // A blocked signal is inherited across exec too, and would defer the trap indefinitely.
-        let output = await run(["-c", "trap 'echo CAUGHT' TERM; kill -TERM $$; sleep 1; echo ALIVE"])
+        let output = run(Self.trapProbe, until: { $0.contains("READY") })
 
         #expect(output.contains("CAUGHT"))
     }
 
     @Test("Output reaches the callback")
-    func streamsOutput() async {
-        let output = await run(["-c", "echo hello-from-pty"])
+    func streamsOutput() {
+        let output = run("echo hello-from-pty", until: { $0.contains("hello-from-pty") })
         #expect(output.contains("hello-from-pty"))
     }
 }
@@ -78,24 +88,11 @@ struct PseudoTerminalTests {
 private final class Collected: @unchecked Sendable {
     private let lock = NSLock()
     private var data = Data()
-    private var finished = false
 
     func append(_ chunk: Data) {
         lock.lock()
         data.append(chunk)
         lock.unlock()
-    }
-
-    func finish() {
-        lock.lock()
-        finished = true
-        lock.unlock()
-    }
-
-    var isFinished: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return finished
     }
 
     var text: String {

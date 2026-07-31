@@ -15,11 +15,25 @@ cleanup through [Mole](https://github.com/tw93/mole).
 - **Runs Mole in-app** in a real terminal emulator, so its prompts (including sudo) work
   without leaving the window.
 
+## Install
+
+Download the latest build from
+[Releases](https://github.com/mohammad-malik/disker/releases/latest), unzip, and drag
+`Disker.app` to `/Applications`.
+
+The release is ad-hoc signed rather than notarised, so the **first launch needs a right-click →
+Open** instead of a double-click. Full instructions, including Full Disk Access, are in
+[docs/INSTALL.md](docs/INSTALL.md).
+
+Requires **macOS 26 (Tahoe)** on **Apple Silicon**. Or [build it yourself](#building) — two
+commands, no Apple developer account needed.
+
 ## Requirements
 
 - macOS 26 (Tahoe) — the Liquid Glass APIs are used directly, with no fallback path.
-- Command Line Tools for Xcode. **Xcode itself is not required**; the app bundle is assembled
-  by hand in `Tools/bundle.sh`.
+- Apple Silicon. The release build is `arm64` only.
+- Command Line Tools for Xcode, to build from source. **Xcode itself is not required**; the app
+  bundle is assembled by hand in `Tools/bundle.sh`.
 - [Mole](https://github.com/tw93/mole) (`brew install mole`) — optional. Without it the
   scanner and chart work normally and the cleanup features report that it is missing.
 
@@ -31,6 +45,10 @@ cleanup through [Mole](https://github.com/tw93/mole).
 ./Tools/test.sh                      # runs the test suite
 open build/Disker.app
 ```
+
+`Tools/release.sh <version>` produces the distributable zip. It signs ad-hoc rather than with
+your local identity, because that certificate is trusted only in the keychain that created it —
+elsewhere the bundle fails validation and Finder calls the app damaged.
 
 ### Full Disk Access
 

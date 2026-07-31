@@ -12,7 +12,7 @@ cd "$REPO_ROOT"
 CONFIGURATION="${1:-release}"
 BUILD_DIR=".build/arm64-apple-macosx/$CONFIGURATION"
 APP_DIR="build/$APP_NAME.app"
-VERSION="0.1.0"
+VERSION="${DISKER_VERSION:-1.0.0}"
 
 echo "==> Building ($CONFIGURATION)"
 swift build -c "$CONFIGURATION" --product "$APP_NAME" "${TESTING_FLAGS[@]}"
@@ -74,8 +74,17 @@ fi
 # --- Signing ----------------------------------------------------------------
 # Prefer the stable self-signed identity. Falling back to ad-hoc keeps the build working
 # out of the box, at the cost of Full Disk Access resetting on every rebuild.
+#
+# DISKER_ADHOC=1 forces ad-hoc even when the identity exists, which is what a build for
+# anyone else needs. The self-signed certificate is trusted only in the keychain that created
+# it; on another Mac a bundle signed with it fails validation outright and Finder reports the
+# app as damaged, which is harder to get past than the ordinary unidentified-developer prompt
+# an ad-hoc signature produces.
 echo "==> Signing"
-if security find-certificate -c "$SIGNING_IDENTITY" >/dev/null 2>&1; then
+if [[ "${DISKER_ADHOC:-0}" == "1" ]]; then
+    codesign --force --sign - "$APP_DIR"
+    echo "    Signed ad-hoc for distribution."
+elif security find-certificate -c "$SIGNING_IDENTITY" >/dev/null 2>&1; then
     codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none "$APP_DIR"
     echo "    Signed with '$SIGNING_IDENTITY' (Full Disk Access persists across rebuilds)."
 else
