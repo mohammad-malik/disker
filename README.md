@@ -117,4 +117,20 @@ Early but working end to end: scanning, the chart, recommendations, in-app delet
 and the full Mole configuration and run flow. Treemap view, search, and duplicate detection are
 not implemented.
 
-No license file yet, so default copyright applies.
+## License
+
+[PolyForm Noncommercial 1.0.0](LICENSE.md) — **free for any noncommercial purpose, not for
+profit.** Personal use, hobby projects, research, education, and use by nonprofit and
+government organizations are all permitted, including modifying and redistributing it. Selling
+it, or using it as part of a commercial product or service, is not.
+
+This is deliberately not an open-source license by the OSI definition, since it restricts who
+may use the software and for what.
+
+### Mole
+
+[Mole](https://github.com/tw93/mole) is GPL-3.0-or-later, but Disker neither includes nor
+distributes it — it runs an existing `mole` on your `PATH` as a separate process and reads its
+output. That is the FSF's own textbook case of two separate programs, so Mole's copyleft does
+not extend to Disker. [docs/THIRD-PARTY.md](docs/THIRD-PARTY.md) sets out the reasoning and the
+two changes that would break it, neither of which is true today.
