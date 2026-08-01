@@ -1,5 +1,29 @@
 # Changelog
 
+## Unreleased
+
+### Scanning is roughly 5× faster
+
+- Traversal now runs on a pool of workers sharing one queue of directories, instead of fanning
+  out only across the root's immediate children. The old shape made a scan take as long as its
+  single largest subtree, which on a real disk means one thread walking most of the volume while
+  the others idle: 31s at 27% CPU, about one core of eight. The same volume now scans in ~9s.
+- Fixing it by calling `concurrentPerform` at every level does not work — nested regions get no
+  extra threads once the outer one has claimed the pool, and run on the calling thread instead.
+  Recorded in `docs/ARCHITECTURE.md` so it is not retried.
+- `workerCount` now does something. It was declared, defaulted, and never read.
+
+### Correctness
+
+- Interrupted (`EINTR`) directory opens are retried instead of being reported as unreadable.
+  They were being counted as permission failures, which both dropped those directories from the
+  total and inflated the "could not be read" warning. Only visible under concurrency: 217
+  unreadable directories with one worker versus 227 with sixteen.
+- A negative `getattrlistbulk` return is no longer treated as the end of a directory, which
+  would have silently truncated a listing part-way through.
+- New tests assert that scan results do not depend on the worker count, and that a deeply
+  nested chain finishes rather than stalling.
+
 ## v1 — 2026-07-31
 
 First release.

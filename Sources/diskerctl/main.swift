@@ -41,7 +41,7 @@ extension String {
 let arguments = CommandLine.arguments
 
 guard arguments.count >= 2 else {
-    print("usage: diskerctl scan <path> [--depth N]")
+    print("usage: diskerctl scan <path> [--depth N] [--workers N]")
     print("       diskerctl volumes")
     print("       diskerctl recommend")
     print("       diskerctl mole")
@@ -51,7 +51,7 @@ guard arguments.count >= 2 else {
 switch arguments[1] {
 case "scan":
     guard arguments.count >= 3 else {
-        print("usage: diskerctl scan <path> [--depth N]")
+        print("usage: diskerctl scan <path> [--depth N] [--workers N]")
         exit(1)
     }
     let path = arguments[2]
@@ -60,12 +60,24 @@ case "scan":
         maxDepth = Int(arguments[flagIndex + 1]) ?? 2
     }
 
-    let scanner = VolumeScanner()
+    var options = ScanOptions()
+    if let flagIndex = arguments.firstIndex(of: "--workers"), flagIndex + 1 < arguments.count,
+        let workers = Int(arguments[flagIndex + 1])
+    {
+        options.workerCount = workers
+    }
+
+    // The live counter would interleave with the scanner's own diagnostics and make them
+    // unreadable, so it stands down while those are being collected.
+    let showProgress = ProcessInfo.processInfo.environment["DISKER_SCAN_STATS"] != "1"
+
+    let scanner = VolumeScanner(options: options)
     let result = try await scanner.scan(path: path) { progress in
+        guard showProgress else { return }
         FileHandle.standardError.write(
             Data("\r  \(progress.filesScanned) files…".utf8))
     }
-    FileHandle.standardError.write(Data("\r\u{1B}[K".utf8))
+    if showProgress { FileHandle.standardError.write(Data("\r\u{1B}[K".utf8)) }
 
     printTree(result.root, depth: 0, maxDepth: maxDepth)
     print("")

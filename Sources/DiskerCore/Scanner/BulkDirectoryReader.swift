@@ -33,8 +33,20 @@ enum BulkDirectoryReader {
 
     /// Reads every entry in `path`. Symlinks are reported but never followed.
     static func read(path: String, into sink: (BulkEntry) -> Void) throws {
-        let fd = open(path, O_RDONLY | O_DIRECTORY, 0)
-        guard fd >= 0 else { throw ReadError.cannotOpen(errno: errno) }
+        // Retried on EINTR rather than reported as a failure. A directory whose open was
+        // merely interrupted by a signal is perfectly readable, but the caller cannot tell
+        // that apart from a denial and marks it unreadable — which both loses its contents
+        // from the total and inflates the "N items could not be read" warning that is
+        // supposed to mean "grant Full Disk Access". This showed up only under concurrency:
+        // scanning with one worker reported 217 unreadable directories and with sixteen,
+        // 227, the difference being exactly nine interrupted opens.
+        var fd: Int32 = -1
+        while true {
+            fd = open(path, O_RDONLY | O_DIRECTORY, 0)
+            if fd >= 0 { break }
+            if errno == EINTR { continue }
+            throw ReadError.cannotOpen(errno: errno)
+        }
         defer { close(fd) }
 
         var attrList = attrlist()
@@ -59,7 +71,11 @@ enum BulkDirectoryReader {
             let count = withUnsafeMutablePointer(to: &attrList) { listPtr in
                 getattrlistbulk(fd, listPtr, buffer, bufferSize, 0)
             }
-            if count <= 0 { break }  // 0 = exhausted; negative = error, treated as end of data
+            // 0 means exhausted. A negative return is an error, and treating it as the end
+            // of the directory would silently drop every remaining entry — so an interrupted
+            // call is retried rather than quietly truncating the listing mid-directory.
+            if count < 0 && errno == EINTR { continue }
+            if count <= 0 { break }
 
             var cursor = buffer
             for _ in 0..<count {

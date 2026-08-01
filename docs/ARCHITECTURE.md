@@ -48,10 +48,69 @@ Hardlinks and APFS clones are counted once, keyed on `(device, fileID)`. Only en
 link count above one are tracked, which keeps the set small. Which occurrence "wins" is not
 defined — it does not affect totals.
 
+### Parallelism
+
+Traversal runs on a fixed pool of workers pulling from one shared stack of directories
+(`TraversalQueue`). Each finished directory is assembled into an immutable `FileNode` by
+whichever worker completes its last child, cascading upward to the root.
+
+It first fanned out only across the root's immediate children, which made a scan take as long
+as its single largest subtree — real disks are lopsided enough that one thread ended up walking
+two thirds of the volume while the rest idled. A full scan took 31s at 27% CPU, about one core
+of eight.
+
+The obvious repair — `DispatchQueue.concurrentPerform` at every level rather than just the root
+— **does not work**, and is worth recording so nobody retries it. `concurrentPerform` runs
+iterations on the calling thread plus whatever pool threads are free; once the outer region has
+claimed the pool, an inner region finds nothing spare and quietly runs on the caller alone, i.e.
+serially. With a deliberately generous fan-out budget that recorded *zero* refusals, `Users`
+still took 27.0s inside a whole-volume scan against 16.1s scanned by itself. The pool was the
+ceiling, not the budget.
+
+With a real work queue the same volume scans in roughly 9s. Traversal is bound by syscall
+latency rather than bandwidth or CPU, so oversubscribing cores is correct: 49.6s on one worker,
+13.5s on four, ~9s from eight upward, turning back up past about twenty as contention takes
+over. Hence a default of twice the core count, capped at 16.
+
+A stack rather than a queue, because taking the most recently discovered directory keeps a
+worker near the subtree it just read and avoids holding an entire breadth-first level in memory.
+Balance is automatic: a worker that finishes a small subtree immediately takes more work.
+
 ### Permissions
 
 `EPERM` is expected, not exceptional. Unreadable directories are counted and reported, so a scan
 without Full Disk Access is presented as a lower bound rather than a confidently wrong total.
+
+`EINTR` is **not** a failure and must be retried. An interrupted `open` is indistinguishable to
+the caller from a denial, so it marked a perfectly readable directory unreadable — dropping its
+contents from the total and inflating the "N items could not be read" notice that is supposed to
+mean "grant Full Disk Access". It only appeared under concurrency: the same volume reported 217
+unreadable directories with one worker and 227 with sixteen, the difference being exactly nine
+interrupted opens. `getattrlistbulk` needs the same treatment, where a negative return was being
+read as end-of-directory and would silently truncate a listing mid-way.
+
+Without Full Disk Access, a directory the process may not enter costs a flat **~21 seconds**
+before failing, not a prompt `EPERM`. That is a system-wide cost — a plain `/bin/ls` pays it
+too — and it dominates everything else: enough such directories and every worker sits in the
+kernel while the app appears frozen at 0% CPU. This is the usual answer to "the scan hangs".
+
+### Diagnostics
+
+Two environment variables, both off by default:
+
+| Variable | Effect |
+| --- | --- |
+| `DISKER_SCAN_STATS=1` | Worker count, directories processed, peak queue depth, and every unreadable directory with its errno |
+| `DISKER_TRACE_OPENS=1` | `OPEN`/`DONE` around each directory read |
+
+The pairing in the second is the point. A scan that looks hung is nearly always blocked in
+`open(2)`, and the paths with an `OPEN` and no matching `DONE` name exactly which ones:
+
+```sh
+DISKER_TRACE_OPENS=1 swift run diskerctl scan / 2>trace.log
+awk '/^OPEN /{sub(/^OPEN /,"");o[$0]++} /^DONE /{sub(/^DONE /,"");d[$0]++} \
+     END{for(p in o) if(o[p]>d[p]) print p}' trace.log
+```
 
 ## Safety
 

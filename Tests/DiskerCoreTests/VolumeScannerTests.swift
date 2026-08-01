@@ -145,4 +145,74 @@ struct VolumeScannerTests {
         #expect(result.root.fileCount == 50)
         #expect(result.duration > 0)
     }
+
+    /// The invariant that traversal is concurrent for speed only, never for its answers.
+    ///
+    /// Worth asserting explicitly, because it has already been broken once. Traversal marks
+    /// a directory unreadable when opening it fails, and an `open` interrupted by a signal
+    /// fails like any other — so with sixteen workers a full-volume scan reported ten more
+    /// unreadable directories than the same scan with one, dropping their contents from the
+    /// total. Nothing about that was visible in a single-threaded test.
+    @Test("Results do not depend on how many workers ran")
+    func resultsAreIndependentOfWorkerCount() async throws {
+        let fixture = try Fixture()
+        // Wide and deep, so tasks are still being pushed while others are being finalised
+        // and the finish-the-parent cascade actually has something to race against.
+        for branch in 0..<12 {
+            for depth in 0..<4 {
+                let path = (0...depth).map { "b\(branch)-d\($0)" }.joined(separator: "/")
+                _ = try fixture.makeFile("\(path)/leaf.bin", bytes: 20_000 + depth)
+            }
+        }
+        _ = try fixture.makeDirectory("empty")
+
+        var totals: [(workers: Int, size: UInt64, files: Int, unreadable: Int)] = []
+        for workers in [1, 2, 8, 16] {
+            var options = granularOptions
+            options.workerCount = workers
+            let result = try await VolumeScanner(options: options).scan(path: fixture.root.path)
+            totals.append(
+                (workers, result.root.size, result.root.fileCount, result.inaccessibleCount))
+        }
+
+        let reference = try #require(totals.first)
+        #expect(reference.files == 48)
+        for outcome in totals.dropFirst() {
+            #expect(
+                outcome.size == reference.size,
+                "size differs at \(outcome.workers) workers")
+            #expect(
+                outcome.files == reference.files,
+                "file count differs at \(outcome.workers) workers")
+            #expect(
+                outcome.unreadable == reference.unreadable,
+                "unreadable count differs at \(outcome.workers) workers")
+        }
+    }
+
+    /// Guards the traversal queue against stalling, and its finalisation against the stack.
+    ///
+    /// A chain like this exposes only one runnable directory at a time, so every worker but
+    /// one is parked on an empty queue for the whole scan while the root stays unfinished.
+    /// If the cascade that finishes a directory once its last child completes ever fails to
+    /// reach the root, those workers wait forever and this hangs rather than fails.
+    ///
+    /// It also keeps the finalisation loop honest about depth: that cascade climbs one level
+    /// per finished directory, and written recursively it would put the tree's full depth on
+    /// a single stack.
+    @Test("A single deep chain finishes rather than stalling")
+    func deepChainTerminates() async throws {
+        let fixture = try Fixture()
+        // Single-character components: the whole chain still has to fit in PATH_MAX, and
+        // the point here is depth rather than long names.
+        let chain = (0..<120).map { "d\($0)" }.joined(separator: "/")
+        _ = try fixture.makeFile("\(chain)/bottom.bin", bytes: 30_000)
+
+        var options = granularOptions
+        options.workerCount = 8
+        let result = try await VolumeScanner(options: options).scan(path: fixture.root.path)
+
+        #expect(result.root.fileCount == 1)
+        #expect(result.root.size >= 30_000)
+    }
 }

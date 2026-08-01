@@ -27,8 +27,10 @@ Then it points out what is actually safe to delete.
 3. **Right-click it and choose Open** the first time. A normal double-click will be refused —
    the app isn't notarised by Apple, so macOS asks once. After that it opens normally.
 
-You'll also want to give it **Full Disk Access** in System Settings, or it can't see everything
-and will tell you its total is incomplete.
+You'll also want to give it **Full Disk Access** in System Settings. Without it Disker can't see
+everything and will tell you its total is incomplete — and the scan gets *much* slower, because
+macOS spends around twenty seconds deciding about each folder it isn't allowed into. If a scan
+seems to hang, this is almost always why.
 
 [Full instructions →](docs/INSTALL.md)
 
@@ -38,8 +40,8 @@ works without it.
 
 ## Using it
 
-Disker scans your startup disk when you open it, which takes about a minute the first time and
-is remembered afterwards.
+Disker scans your startup disk when you open it — a few seconds for a full volume — and
+remembers the result, so it opens instantly next time. Press ⌘R whenever you want fresh numbers.
 
 - **Click a slice** to zoom in; use the breadcrumb at the top to come back out.
 - **Switch disks** with the drive button in the toolbar.

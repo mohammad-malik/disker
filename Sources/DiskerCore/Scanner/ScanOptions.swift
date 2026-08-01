@@ -10,9 +10,20 @@ public struct ScanOptions: Sendable {
     /// directories (caches with 100k entries) blowing up memory and the chart alike.
     public var maxChildrenPerDirectory: Int
 
-    /// Concurrent traversal workers. Tuned low on purpose: directory traversal is
-    /// I/O-bound and oversubscribing APFS costs more in contention than it gains
-    /// in parallelism.
+    /// Threads traversing directories.
+    ///
+    /// An earlier comment here claimed traversal was I/O-bound and that concurrency cost
+    /// more in APFS contention than it gained, which is why the value was set low. It was
+    /// also dead — declared, defaulted, and never read, because traversal fanned out only
+    /// at the root and took whatever width libdispatch chose.
+    ///
+    /// Measurement says the opposite. Traversal is bound by syscall *latency*, so threads
+    /// spend most of their time blocked and oversubscribing the cores is the right move. A
+    /// full scan of a 204 GB volume went 49.6s on one thread, 13.5s on four, and ~9s from
+    /// eight upward; past about twenty it turns back down as contention takes over.
+    ///
+    /// Hence twice the core count, capped: the cap keeps a many-core machine off the far
+    /// side of that curve, and the floor keeps a small one from crawling.
     public var workerCount: Int
 
     /// Stay on the volume we started on. Without this, scanning `/` follows the
@@ -26,7 +37,7 @@ public struct ScanOptions: Sendable {
     public init(
         smallFileThreshold: UInt64 = 1024 * 1024,
         maxChildrenPerDirectory: Int = 256,
-        workerCount: Int = min(6, ProcessInfo.processInfo.activeProcessorCount),
+        workerCount: Int = min(16, max(4, ProcessInfo.processInfo.activeProcessorCount * 2)),
         stayOnDevice: Bool = true,
         excludedPaths: Set<String> = ScanOptions.defaultExclusions
     ) {
