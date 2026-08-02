@@ -84,6 +84,13 @@ final class AppModel {
     }
     /// Grouped once on assignment, so the view never re-derives it while scrolling.
     private(set) var recommendationGroups: [RecommendationGroup] = []
+    /// Whether the grant is currently held. Starts optimistic so a launch showing a cached
+    /// scan does not flash a warning before the real check has run.
+    ///
+    /// This has to be refreshed wherever a scan is *displayed*, not only where one is taken.
+    /// Only `scan()` used to set it, so a cached scan was described using a grant state from
+    /// whenever that scan happened to be taken — which could be days earlier, and was simply
+    /// the `true` default on a fresh launch.
     var hasFullDiskAccess = true
     var showingAccessSheet = false
     /// Surfaced inline rather than as a modal alert — a failed delete is information,
@@ -154,6 +161,7 @@ final class AppModel {
     func loadCachedScan() async -> Bool {
         guard let entry = ScanCache.shared.load(expecting: scanRoot) else { return false }
         let result = entry.result
+        hasFullDiskAccess = FullDiskAccess.isGranted
         scanState = .loaded(result)
         drillPath = [result.root]
         cachedAt = entry.scannedAt

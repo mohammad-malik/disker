@@ -219,15 +219,32 @@ struct InspectorView: View {
                 }
                 if result.inaccessibleCount > 0 {
                     Label(
-                        "\(result.inaccessibleCount) folders could not be read — the total is "
-                            + "a lower bound. Grant Full Disk Access for a complete picture.",
+                        unreadableNotice(count: result.inaccessibleCount),
                         systemImage: "lock.fill"
                     )
                     .font(.caption)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(model.hasFullDiskAccess ? Color.secondary : Color.orange)
                 }
             }
         }
+    }
+
+    /// Explains the unreadable folders in terms of something the user can act on.
+    ///
+    /// Only advise granting access when that would actually help. Once the grant is held,
+    /// what remains is root-owned system state — `/private/var/folders`, `/private/var/db`
+    /// and the like — which no amount of Full Disk Access opens, because it is guarded by
+    /// ordinary Unix permissions rather than by TCC. Telling someone who has already granted
+    /// it to go and grant it just reads as the app being broken.
+    ///
+    /// Built in pieces because the type checker gives up on the concatenated ternary.
+    private func unreadableNotice(count: Int) -> String {
+        if model.hasFullDiskAccess {
+            let opening = "\(count) folders are reserved for macOS and can't be read by any app"
+            return opening + ", so the total is slightly low. This is normal."
+        }
+        let opening = "\(count) folders could not be read — the total is a lower bound."
+        return opening + " Grant Full Disk Access for a complete picture."
     }
 
     @ViewBuilder
