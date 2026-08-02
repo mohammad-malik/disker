@@ -70,6 +70,9 @@ final class AppModel {
     var volume: VolumeInfo?
     var moleReport: MoleReport?
     var isLoadingMole = false
+    /// When the displayed Mole preview was taken, if it came from cache rather than a run
+    /// just now. Shown alongside the figure so a day-old number is never mistaken for live.
+    var moleCheckedAt: Date?
 
     /// Nodes from the scan root down to whatever the chart is currently centred on.
     /// Doubles as the breadcrumb and as the source of full paths, which is why nodes
@@ -294,10 +297,41 @@ final class AppModel {
         NSPasteboard.general.setString(absolutePath(for: segment), forType: .string)
     }
 
+    /// Shows the last preview immediately, and only asks Mole again when it has gone stale.
+    ///
+    /// `mole clean --dry-run` takes about 98 seconds — longer than scanning the whole disk —
+    /// and this used to run on every launch, which is why the bar read "Checking with Mole…"
+    /// for a minute and a half while competing with the scan that had just started. Mole
+    /// offers no faster way to ask, so the only lever is how often it is asked.
     func loadMoleReport() async {
+        if let entry = MoleReportCache.shared.load() {
+            moleReport = entry.report
+            moleCheckedAt = entry.checkedAt
+            guard entry.isStale else { return }
+        }
+        await refreshMoleReport()
+    }
+
+    /// Asks Mole again regardless of what is cached.
+    ///
+    /// The existing figure deliberately stays on screen while this runs. Blanking it would
+    /// trade a slightly old number for no number at all, for a minute and a half.
+    func refreshMoleReport() async {
         isLoadingMole = true
         defer { isLoadingMole = false }
-        moleReport = try? await mole.dryRun()
+        guard let report = try? await mole.dryRun() else { return }
+        moleReport = report
+        moleCheckedAt = Date()
+        MoleReportCache.shared.save(report)
+    }
+
+    /// Drops the cached preview after a real cleanup, since Mole has just deleted the very
+    /// things it was counting. Refreshing in the background keeps the bar from sitting on a
+    /// figure that is now certainly wrong.
+    func invalidateMoleReport() async {
+        MoleReportCache.shared.clear()
+        moleCheckedAt = nil
+        await refreshMoleReport()
     }
 
     /// Opens the in-app cleanup terminal.

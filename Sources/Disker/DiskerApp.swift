@@ -84,7 +84,12 @@ struct ContentView: View {
             }
             await model.loadMoleReport()
         }
-        .sheet(isPresented: $model.showingMoleSheet) {
+        // A cleanup run deletes the very things the cached preview was counting, so the
+        // figure is re-taken once the sheet closes rather than left advertising space that
+        // has already been freed.
+        .sheet(isPresented: $model.showingMoleSheet, onDismiss: {
+            Task { await model.invalidateMoleReport() }
+        }) {
             MoleCleanupSheet(model: model)
         }
         .confirmationDialog(

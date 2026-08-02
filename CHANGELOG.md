@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Mole's preview no longer blocks every launch
+
+- `mole clean --dry-run` takes about 98 seconds — longer than scanning the whole disk — and
+  was run on every launch, so "Checking with Mole…" sat there for a minute and a half while
+  competing with the scan that had just started. There is no faster way to ask: Mole has no
+  JSON form of the preview, `analyze` answers a different question, and `history --json`
+  reports past cleanups rather than a forecast.
+- The preview is now cached for 24 hours and shown immediately with its age. Mole is re-run
+  only when that has gone stale, when you press Refresh, or after an actual cleanup, which
+  invalidates it because Mole has just deleted the things it was counting.
+- A cached figure stays on screen while a refresh runs, rather than being replaced by a
+  spinner for the ~98 seconds it takes.
+- Failed parses are not cached, so one transient failure cannot pin "couldn't read Mole's
+  output" on screen for a day.
+
 ## v1.1 — 2026-08-02
 
 ### Scanning is roughly 5× faster

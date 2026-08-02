@@ -138,8 +138,25 @@ too, which pruned the entire home directory from the results.
 Mole is a separate process, located on `PATH` and never bundled. See
 [THIRD-PARTY.md](THIRD-PARTY.md) for why that boundary matters legally.
 
+**The cleanup preview is cached, because it is the slowest thing Disker does.**
+`mole clean --dry-run` takes about **98 seconds** against Mole 1.43.1 — longer than a full
+scan of the same disk — and it used to run on every launch, so the recommendations bar read
+"Checking with Mole…" for a minute and a half while competing with the scan that had just
+started. There is no cheaper way to ask: Mole exposes no JSON form of the preview, `analyze`
+answers a different question (disk usage, which Disker already computes itself), and
+`history --json` reports past cleanups rather than a forecast. So the cost is inherent and the
+only lever is frequency. `MoleReportCache` keeps the last preview for 24 hours — roughly the
+timescale on which caches and build artifacts actually accumulate — shows it immediately with
+its age, and re-runs only when stale, when the user presses Refresh, or after an actual
+cleanup has invalidated it. Failed parses are deliberately not cached, so one transient
+failure cannot pin "couldn't read Mole's output" on screen for a day.
+
 **Mole needs a pty, not a pipe.** It checks `isatty` and will not prompt otherwise, so
 `PseudoTerminal` runs it under `forkpty(3)`.
+
+Note when debugging that `mole` is a Bash script; the process that actually appears is
+`.../libexec/bin/clean.sh`, so that is what to match on when checking whether a preview is
+running.
 
 **Its output needs emulating, not stripping.** Mole redraws in place with carriage returns and
 cursor addressing; stripping ANSI escapes and appending stacks every frame on top of the last.

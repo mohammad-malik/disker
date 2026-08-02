@@ -28,9 +28,16 @@ struct RecommendationBar: View {
                     .font(.headline)
                 switch model.moleReport {
                 case .parsed(_, let total):
-                    Text("\(total.formattedBytes) can be cleaned")
-                        .font(.callout)
-                        .foregroundStyle(.tint)
+                    // Keeps showing the cached figure while a refresh runs. Replacing it
+                    // with "Checking with Mole…" for the ~98 seconds that takes would hide
+                    // a good answer behind a spinner.
+                    Text(
+                        model.isLoadingMole
+                            ? "\(total.formattedBytes) can be cleaned · rechecking…"
+                            : "\(total.formattedBytes) can be cleaned"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.tint)
                 case .unparseable(let reason):
                     // Never substitute a guess here: this figure precedes a deletion.
                     Text(reason)

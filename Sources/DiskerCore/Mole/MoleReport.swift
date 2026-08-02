@@ -1,6 +1,6 @@
 import Foundation
 
-public struct MoleItem: Sendable, Identifiable {
+public struct MoleItem: Sendable, Identifiable, Codable {
     public let id = UUID()
     public let name: String
     public let size: UInt64
@@ -9,9 +9,16 @@ public struct MoleItem: Sendable, Identifiable {
         self.name = name
         self.size = size
     }
+
+    /// `id` is a fresh identity for SwiftUI's benefit, not part of the data, so it is left
+    /// out of the encoding. It also could not be decoded into a `let` that already has an
+    /// initialiser — listing it here would only produce a warning and a useless field.
+    private enum CodingKeys: String, CodingKey {
+        case name, size
+    }
 }
 
-public struct MoleCategory: Sendable, Identifiable {
+public struct MoleCategory: Sendable, Identifiable, Codable {
     public let id = UUID()
     public let name: String
     public let items: [MoleItem]
@@ -22,6 +29,10 @@ public struct MoleCategory: Sendable, Identifiable {
         self.name = name
         self.items = items
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case name, items
+    }
 }
 
 /// Outcome of a Mole dry run.
@@ -31,7 +42,7 @@ public struct MoleCategory: Sendable, Identifiable {
 /// "couldn't read Mole's output" is correct; inventing a reclaimable-space figure from a
 /// half-matched parse would be worse than showing nothing, since the number drives a
 /// destructive decision.
-public enum MoleReport: Sendable {
+public enum MoleReport: Sendable, Codable {
     case parsed(categories: [MoleCategory], totalReclaimable: UInt64)
     case unparseable(reason: String)
 

@@ -41,13 +41,10 @@ struct MoleView: View {
                         .font(.headline)
                         .foregroundStyle(.tint)
                 }
-                Text(
-                    "These figures come from a preview Disker runs in the background. "
-                        + "Nothing has been deleted."
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(previewProvenance)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             VStack(spacing: 8) {
@@ -61,7 +58,9 @@ struct MoleView: View {
                 .controlSize(.large)
 
                 Button {
-                    Task { await model.loadMoleReport() }
+                    // Deliberately the forcing version: someone pressing Refresh wants Mole
+                    // asked again, not the cached answer they are already looking at.
+                    Task { await model.refreshMoleReport() }
                 } label: {
                     Label("Refresh Preview", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity)
@@ -71,6 +70,25 @@ struct MoleView: View {
             }
             .frame(width: 190)
         }
+    }
+
+    /// Says where the figures came from and how old they are.
+    ///
+    /// Asking Mole takes about 98 seconds, so the preview is cached and what is on screen is
+    /// usually from earlier. Saying so is the honest counterpart to not re-running it: the
+    /// number precedes a deletion, and "as of this morning" is a materially different claim
+    /// from "as of now".
+    private var previewProvenance: String {
+        if model.isLoadingMole {
+            return "Asking Mole what it would remove. This takes a minute or two — "
+                + "anything shown below is from the last check."
+        }
+        guard let checkedAt = model.moleCheckedAt else {
+            return "These figures come from a preview Disker just ran. Nothing has been deleted."
+        }
+        let when = RelativeDateTimeFormatter().localizedString(for: checkedAt, relativeTo: Date())
+        return "From a preview taken \(when). Nothing has been deleted — press Refresh for "
+            + "current figures."
     }
 
     private var loading: some View {
