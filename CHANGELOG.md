@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.1.1 — 2026-08-02
 
 ### Mole's preview no longer blocks every launch
 
