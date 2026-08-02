@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.1 — 2026-08-02
 
 ### Scanning is roughly 5× faster
 
@@ -23,6 +23,21 @@
   would have silently truncated a listing part-way through.
 - New tests assert that scan results do not depend on the worker count, and that a deeply
   nested chain finishes rather than stalling.
+
+### Permissions
+
+- The "N folders could not be read" notice no longer tells you to grant Full Disk Access when
+  you already have. It keyed off the unreadable count alone, so granting access changed the
+  number but not the advice — and the advice could not have worked, because what stays
+  unreadable on a granted scan is root-owned system state (`/private/var/folders`,
+  `/private/var/db`, `/private/var/spool` and similar) guarded by Unix permissions rather than
+  by TCC. It now says those folders are reserved for macOS, and asks for the grant only when
+  asking would achieve something.
+- The grant is re-checked when a cached scan is shown, not only when a scan is taken. It was
+  set inside the scan path alone, so opening the app to yesterday's cached result described it
+  using an optimistic default instead of the current state.
+- Granting Full Disk Access is worth doing: on the development machine it was the difference
+  between 204.8 GB with 217 unreadable folders and 200.8 GB with ~376.
 
 ## v1 — 2026-07-31
 
