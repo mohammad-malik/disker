@@ -108,6 +108,60 @@ struct PseudoTerminalTests {
         #expect(output.contains("hello-from-pty"))
     }
 
+    /// The pty descriptor belongs to the read source, and is released when the stream ends
+    /// rather than when the object is deallocated.
+    ///
+    /// It used to be closed only in `deinit`, which tied a kernel resource to Swift's
+    /// deallocation timing — a session held open in the UI kept its descriptor for as long as
+    /// the window lived, long after the child had exited. Worse, `readSource` was published
+    /// *after* `resume()`, so a command that exited immediately could reach the EOF handler
+    /// while it was still nil; the cancel then did nothing and left a source re-arming forever
+    /// on a stream at permanent end-of-file.
+    ///
+    /// Asserted with the terminals deliberately kept alive, so a passing result cannot be
+    /// explained by `deinit` having run.
+    @Test("The pty descriptor is released when the stream ends, not when the object dies")
+    func descriptorIsReleasedAtEndOfStream() {
+        let count = 24
+        let finished = Counter()
+        var terminals: [PseudoTerminal] = []
+
+        let baseline = Self.openDescriptorCount()
+        for _ in 0..<count {
+            let terminal = PseudoTerminal(
+                onOutput: { _ in },
+                onStateChange: { state in
+                    if case .finished = state { finished.increment() }
+                })
+            terminals.append(terminal)
+            terminal.start(
+                executable: "/bin/sh", arguments: ["-c", "echo x"], columns: 80, rows: 24)
+        }
+
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline && finished.value < count {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        // Cancellation is asynchronous; the handler that closes the descriptor runs after
+        // delivery has stopped.
+        Thread.sleep(forTimeInterval: 1.0)
+
+        let growth = Self.openDescriptorCount() - baseline
+        // Every child is finished, so all 24 masters should be closed. A small allowance
+        // covers descriptors Dispatch and the test runner open for their own reasons.
+        #expect(
+            growth < count / 2,
+            "\(growth) descriptors still open after \(finished.value)/\(count) children exited")
+
+        withExtendedLifetime(terminals) {}
+    }
+
+    private static func openDescriptorCount() -> Int {
+        var open = 0
+        for descriptor in 0..<Int32(512) where fcntl(descriptor, F_GETFD) != -1 { open += 1 }
+        return open
+    }
+
     /// argv and envp are built before the fork, because the child may not allocate. That
     /// hoisting is easy to get subtly wrong — a lost inherited variable, a dropped override,
     /// or a missing NULL terminator — and none of it would show up as a crash, only as Mole
@@ -126,6 +180,24 @@ struct PseudoTerminalTests {
         #expect(output.contains("T=xterm-256color"))
         #expect(output.contains("A=from-caller"))
         #expect(output.contains("I=from-parent"))
+    }
+}
+
+/// Counts callbacks arriving from the terminal's background queues.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+
+    func increment() {
+        lock.lock()
+        count += 1
+        lock.unlock()
+    }
+
+    var value: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
     }
 }
 

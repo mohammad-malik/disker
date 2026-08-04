@@ -39,8 +39,15 @@ public final class PseudoTerminal: @unchecked Sendable {
     }
 
     deinit {
-        readSource?.cancel()
-        if primaryFD >= 0 { close(primaryFD) }
+        // No lock: `deinit` cannot overlap the event handler, which holds only a weak
+        // reference and so fails its `guard let self` once deallocation has begun.
+        if let source = readSource {
+            // The source owns the descriptor and closes it from its cancel handler.
+            source.cancel()
+        } else if primaryFD >= 0 {
+            // Reading never started, so nothing else will close it.
+            close(primaryFD)
+        }
     }
 
     /// Forks a child attached to a new pty and starts streaming its output.
@@ -205,13 +212,48 @@ public final class PseudoTerminal: @unchecked Sendable {
             // 0 means the child closed the pty; negative is an error. Either way the
             // stream is done and continuing would spin the event source.
             guard count > 0 else {
-                self.readSource?.cancel()
+                self.stopReading()
                 return
             }
             self.onOutput(Data(buffer[0..<count]))
         }
-        source.resume()
+
+        // Closing a descriptor that a dispatch source is watching is undefined — the source
+        // may already be delivering an event for it, and the number can be reused underneath
+        // it. The cancel handler is the one place the runtime guarantees no further delivery,
+        // so the source owns the descriptor from here on and nothing else may close it.
+        source.setCancelHandler { close(fd) }
+
+        // Published *before* `resume`, and under the lock.
+        //
+        // Resuming first was a real bug, not a tidiness issue: delivery can begin the instant
+        // the source is resumed, so for a command that exits immediately the EOF handler could
+        // run while `readSource` was still nil. The old `self.readSource?.cancel()` then did
+        // nothing, leaving a source that re-arms on a stream at permanent end-of-file and
+        // spins a global queue for the lifetime of the object. The window is widest for
+        // exactly the cases that matter: a failed exec, or a command that prints and exits.
+        lock.lock()
         readSource = source
+        lock.unlock()
+
+        source.resume()
+    }
+
+    /// Ends output delivery and hands the descriptor to the cancel handler to close.
+    ///
+    /// Idempotent, because both the EOF handler and `terminate()` can reach it, and they can
+    /// reach it concurrently. Whoever takes the source out of `readSource` under the lock is
+    /// the one that cancels; everyone else finds nil and does nothing.
+    private func stopReading() {
+        lock.lock()
+        let source = readSource
+        readSource = nil
+        // The descriptor is about to be closed, so stop handing it to `send`/`resize`.
+        primaryFD = -1
+        lock.unlock()
+        // Cancelled outside the lock: cancellation can run handlers, and holding a lock
+        // across that invites a deadlock for no benefit.
+        source?.cancel()
     }
 
     private func waitForExit(pid: pid_t) {
@@ -328,7 +370,10 @@ public final class PseudoTerminal: @unchecked Sendable {
         lock.lock()
         let pid = childPID
         lock.unlock()
-        readSource?.cancel()
+        // Through stopReading() rather than an unsynchronised `readSource?.cancel()`, so this
+        // cannot race the EOF handler doing the same thing. Every caller drops the terminal
+        // straight afterwards, so closing the descriptor here costs nothing.
+        stopReading()
         guard pid > 0 else { return }
         // Whole group, for the same reason interrupt() does: leaving Mole's helpers running
         // after the window closed would keep deleting with nothing on screen to show it.

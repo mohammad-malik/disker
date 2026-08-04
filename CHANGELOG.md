@@ -17,6 +17,17 @@
 
 ### Forking Mole
 
+- The pty's read source is published before it is resumed, and only ever cancelled under the
+  lock. It was assigned *after* `resume()`, so for a command that exited immediately the
+  end-of-file handler could run while the reference was still nil — the cancel then did
+  nothing and left a dispatch source re-arming forever on a stream at permanent end-of-file,
+  spinning a global queue for the life of the object. The window was widest for exactly the
+  cases that matter: a failed exec, or a command that prints once and exits.
+- The descriptor is now owned by that source and closed from its cancel handler, rather than
+  in `deinit`. Closing a descriptor a dispatch source is still watching is undefined, and
+  tying it to deallocation meant a finished session held its pty for as long as the window
+  lived. Measured: 24 short-lived terminals leaked exactly 24 descriptors before, 0 after.
+
 - The child of `forkpty` no longer allocates before `exec`. It was reading
   `ProcessInfo.processInfo.environment` and calling `strdup` between the fork and the exec,
   where only async-signal-safe calls are permitted: the child gets one thread but inherits
