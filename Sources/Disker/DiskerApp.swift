@@ -190,7 +190,7 @@ struct ContentView: View {
     @ViewBuilder
     private var chartPanel: some View {
         VStack(spacing: 10) {
-            breadcrumb
+            BreadcrumbBar(model: model)
             switch model.scanState {
             case .scanning(let progress):
                 scanningState(progress)
@@ -224,32 +224,6 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var breadcrumb: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(model.breadcrumb.enumerated()), id: \.offset) { index, node in
-                if index > 0 {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-                Button(node.name) {
-                    model.drillUp(to: index)
-                }
-                .buttonStyle(.plain)
-                .font(index == model.breadcrumb.count - 1 ? .headline : .subheadline)
-                .foregroundStyle(index == model.breadcrumb.count - 1 ? .primary : .secondary)
-                // The breadcrumb is where the current location is named, so it is where
-                // people reach for its path. Same two actions as the chart's own menu.
-                .contextMenu {
-                    Button("Copy Path") { model.copyPath(depth: index) }
-                    Button("Reveal in Finder") { model.revealInFinder(depth: index) }
-                }
-                .help(model.absolutePath(forDepth: index))
-            }
-            Spacer()
-        }
     }
 
     @ToolbarContentBuilder

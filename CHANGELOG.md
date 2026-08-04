@@ -19,6 +19,10 @@
 
 - Right-click any breadcrumb entry for Copy Path and Reveal in Finder; hovering shows the
   full path.
+- The path is now a row of chips on a recessed track rather than bare text. It was a control
+  whose whole job is to be clicked, with a hit target of 24×14pt for a crumb named "Data" —
+  under half the 28pt minimum in both directions. Chips are 28–30pt tall, highlight on hover,
+  and the current folder rides on interactive glass.
 
 ## v1.1.1 — 2026-08-02
 
