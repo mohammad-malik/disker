@@ -75,13 +75,27 @@ public final class PseudoTerminal: @unchecked Sendable {
         // Declaring a capable terminal keeps colours and cursor addressing switched on.
         childEnvironment["TERM"] = "xterm-256color"
 
+        // A failed duplication has to abort the launch, not truncate the array.
+        //
+        // `strdup` returning NULL would otherwise terminate `argv` early and hand `execve` a
+        // shorter command than the caller asked for — and the arguments this class is given
+        // are things like `clean --dry-run`. Losing a trailing `--dry-run` turns a preview
+        // into a real deletion. The trigger is allocation failure and so vanishingly rare,
+        // but "rare" is the wrong bar for silently running a different command than the one
+        // requested.
+        let arguments = [executable] + arguments
+        let entries = childEnvironment.map { "\($0.key)=\($0.value)" }
         let path = strdup(executable)
-        let argv = Self.makeCArray(([executable] + arguments))
-        let envp = Self.makeCArray(childEnvironment.map { "\($0.key)=\($0.value)" })
+        let argv = Self.makeCArray(arguments)
+        let envp = Self.makeCArray(entries)
         defer {
             free(path)
-            Self.freeCArray(argv)
-            Self.freeCArray(envp)
+            Self.freeCArray(argv, count: arguments.count)
+            Self.freeCArray(envp, count: entries.count)
+        }
+        guard path != nil, let argv, let envp else {
+            onStateChange(.failed("Out of memory preparing the command."))
+            return
         }
 
         var size = winsize(ws_row: rows, ws_col: columns, ws_xpixel: 0, ws_ypixel: 0)
@@ -150,23 +164,34 @@ public final class PseudoTerminal: @unchecked Sendable {
         return group
     }
 
-    /// Builds a NULL-terminated `char *[]`, as `execve` wants it.
+    /// Builds a NULL-terminated `char *[]`, as `execve` wants it, or nil if any duplication
+    /// failed. All-or-nothing: a partly built array would be a silently shortened command.
     private static func makeCArray(_ values: [String])
-        -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+        -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
     {
         let array = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
             .allocate(capacity: values.count + 1)
-        for (index, value) in values.enumerated() { array[index] = strdup(value) }
+        for (index, value) in values.enumerated() {
+            guard let duplicate = strdup(value) else {
+                // Free by count rather than by scanning for NULL — the NULL that stopped us
+                // is exactly what a scan would mistake for the end of the array.
+                for earlier in 0..<index { free(array[earlier]) }
+                array.deallocate()
+                return nil
+            }
+            array[index] = duplicate
+        }
         array[values.count] = nil
         return array
     }
 
-    private static func freeCArray(_ array: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) {
-        var index = 0
-        while let element = array[index] {
-            free(element)
-            index += 1
-        }
+    /// Frees by count, not by scanning to the first NULL, so it stays correct for any array
+    /// this class hands it.
+    private static func freeCArray(
+        _ array: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?, count: Int
+    ) {
+        guard let array else { return }
+        for index in 0..<count { free(array[index]) }
         array.deallocate()
     }
 
