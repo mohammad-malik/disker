@@ -17,6 +17,14 @@
 
 ### Forking Mole
 
+- A reaped child's pid is forgotten in the same locked step as the reaping, and every signal
+  is delivered while holding that lock. A pid belongs to us only until it is reaped; after
+  that the kernel may hand the number to somebody else, and signalling it was not a harmless
+  no-op — it went through the process-group lookup, which would have resolved a stranger's
+  group and `killpg`ed it. Reachable in ordinary use: let Mole finish, then close the sheet.
+  The wait is now done in two steps, `waitid(WNOWAIT)` then `waitpid(WNOHANG)`, so the child
+  stays a zombie — still owning its pid, so the number cannot be reused — until the reap and
+  the forgetting happen together.
 - The pty descriptor lives behind a holder that makes using it and closing it mutually
   exclusive, instead of being passed around as a bare number. `send`, `resize`, and
   `interrupt` copied that number under a lock, released the lock, and only then made their

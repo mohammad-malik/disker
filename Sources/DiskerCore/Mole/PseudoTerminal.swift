@@ -304,13 +304,66 @@ public final class PseudoTerminal: @unchecked Sendable {
         source?.cancel()
     }
 
+    /// Waits for the child, then reaps it in the same breath as forgetting its pid.
+    ///
+    /// A pid is only ours until it is reaped; the moment it is, the kernel may hand that
+    /// number to somebody else's process. A plain blocking `waitpid` reaped *outside* the
+    /// lock, so a `terminate()` that had already read `childPID` could deliver its SIGTERM
+    /// after the number had been recycled — and via `ownGroup(of:)` that resolves to a
+    /// stranger's process group and `killpg`s it. Reachable in ordinary use: let Mole finish,
+    /// then close the sheet.
+    ///
+    /// So this waits in two steps. `waitid` with `WNOWAIT` blocks until the child exits but
+    /// deliberately leaves it waitable — a zombie still owns its pid, so the number cannot be
+    /// reused and any signal that slips through lands harmlessly on the corpse. Only then is
+    /// the real reap done, under the lock and in the same critical section that clears
+    /// `childPID`, so no caller can observe a reaped pid as live.
     private func waitForExit(pid: pid_t) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 {
+                // An interrupted wait says nothing about the child; anything else means there
+                // is no child left to wait for.
+                if errno != EINTR { return }
+            }
+
+            guard let self else {
+                // Nothing else will collect it, so do not leave a zombie behind.
+                var status: Int32 = 0
+                waitpid(pid, &status, WNOHANG)
+                return
+            }
+
+            self.lock.lock()
             var status: Int32 = 0
-            waitpid(pid, &status, 0)
+            let reaped = waitpid(pid, &status, WNOHANG)
+            if reaped == pid { self.childPID = -1 }
+            self.lock.unlock()
+
+            guard reaped == pid else { return }
             // Decode wait status: low byte carries the signal, second byte the exit code.
             let exitCode = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : status & 0x7F
-            self?.onStateChange(.finished(exitCode: exitCode))
+            self.onStateChange(.finished(exitCode: exitCode))
+        }
+    }
+
+    /// Signals the child, holding the lock across the delivery.
+    ///
+    /// The lock is what makes this safe rather than merely likely to be safe: reaping clears
+    /// `childPID` inside the same lock, so a signal either goes out while the pid is still
+    /// ours or does not go out at all. Reading the pid, releasing the lock, and *then*
+    /// signalling would leave exactly the gap this is here to remove.
+    private func signalChild(_ signalNumber: Int32) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard childPID > 0 else { return }
+        // Whole group where the child owns one, for the same reason interrupt() does: leaving
+        // Mole's helpers running after the window closed would keep deleting with nothing on
+        // screen to show it.
+        if let group = ownGroup(of: childPID) {
+            killpg(group, signalNumber)
+        } else {
+            kill(childPID, signalNumber)
         }
     }
 
@@ -346,32 +399,35 @@ public final class PseudoTerminal: @unchecked Sendable {
     /// whatever is in the foreground (or which a raw-mode reader handles itself), and
     /// signals the whole process group so children are not left running.
     public func interrupt() {
-        lock.lock()
-        let holder = descriptor
-        let pid = childPID
-        lock.unlock()
-        guard pid > 0 else { return }
-
-        holder?.use { fd in
+        currentDescriptor?.use { fd in
             var byte: UInt8 = 0x03
             _ = write(fd, &byte, 1)
         }
+        signalChild(SIGINT)
+    }
 
-        if let group = ownGroup(of: pid) {
-            killpg(group, SIGINT)
-        } else {
-            kill(pid, SIGINT)
-        }
+    /// The pid still considered ours, or -1 once the child has been reaped.
+    ///
+    /// Internal purely so the suite can assert the pid is forgotten at the moment of reaping.
+    /// That is the whole of the pid-reuse guarantee, and it is not observable from outside:
+    /// `isAlive` returning false proves nothing, since a recycled number would usually be
+    /// free at that instant anyway.
+    var trackedChildPID: pid_t {
+        lock.lock()
+        defer { lock.unlock() }
+        return childPID
     }
 
     /// True while the child is still alive.
+    ///
+    /// The probe runs under the lock for the same reason a signal does: once reaping has
+    /// cleared the pid, asking about it would be asking about whoever holds that number now.
     public var isAlive: Bool {
         lock.lock()
-        let pid = childPID
-        lock.unlock()
-        guard pid > 0 else { return false }
+        defer { lock.unlock() }
+        guard childPID > 0 else { return false }
         // Signal 0 performs the permission and existence checks without sending anything.
-        return kill(pid, 0) == 0
+        return kill(childPID, 0) == 0
     }
 
     /// Stops the child, escalating until it actually exits.
@@ -394,7 +450,7 @@ public final class PseudoTerminal: @unchecked Sendable {
                 return
             }
 
-            self.signalGroup(SIGTERM)
+            self.signalChild(SIGTERM)
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 1.2) {
                 [weak self] in
                 guard let self else { return }
@@ -404,31 +460,17 @@ public final class PseudoTerminal: @unchecked Sendable {
                 }
                 // Cannot be trapped. Reached only when the process ignored both earlier
                 // requests, at which point leaving it running is the worse outcome.
-                self.signalGroup(SIGKILL)
+                self.signalChild(SIGKILL)
                 onFinished(true)
             }
         }
     }
 
-    private func signalGroup(_ signal: Int32) {
-        lock.lock()
-        let pid = childPID
-        lock.unlock()
-        guard pid > 0 else { return }
-        if let group = ownGroup(of: pid) { killpg(group, signal) } else { kill(pid, signal) }
-    }
-
     public func terminate() {
-        lock.lock()
-        let pid = childPID
-        lock.unlock()
         // Through stopReading() rather than an unsynchronised `readSource?.cancel()`, so this
         // cannot race the EOF handler doing the same thing. Every caller drops the terminal
         // straight afterwards, so closing the descriptor here costs nothing.
         stopReading()
-        guard pid > 0 else { return }
-        // Whole group, for the same reason interrupt() does: leaving Mole's helpers running
-        // after the window closed would keep deleting with nothing on screen to show it.
-        if let group = ownGroup(of: pid) { killpg(group, SIGTERM) } else { kill(pid, SIGTERM) }
+        signalChild(SIGTERM)
     }
 }

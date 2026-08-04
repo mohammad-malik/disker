@@ -108,6 +108,43 @@ struct PseudoTerminalTests {
         #expect(output.contains("hello-from-pty"))
     }
 
+    /// A reaped pid is forgotten in the same breath as the reaping.
+    ///
+    /// A pid belongs to us only until it is reaped; the moment it is, the kernel may hand that
+    /// number to somebody else. Signalling it afterwards is not a harmless no-op — it goes
+    /// through `ownGroup(of:)`, which would resolve a stranger's process group and `killpg`
+    /// it. Reachable in ordinary use: let Mole finish, then close the sheet, which calls
+    /// `terminate()`.
+    ///
+    /// Asserted on the tracked pid rather than on `isAlive`, because `isAlive` would say
+    /// "false" either way — a recycled number is usually free at that instant, so it proves
+    /// nothing about whether we would have signalled it.
+    @Test("A reaped child's pid is forgotten, so it can never be signalled")
+    func reapedPidIsForgotten() {
+        let finished = Counter()
+        let terminal = PseudoTerminal(
+            onOutput: { _ in },
+            onStateChange: { state in
+                if case .finished = state { finished.increment() }
+            })
+
+        terminal.start(
+            executable: "/bin/sh", arguments: ["-c", "echo done"], columns: 80, rows: 24)
+
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline && finished.value == 0 { Thread.sleep(forTimeInterval: 0.02) }
+
+        #expect(finished.value == 1, "the child never reported exiting")
+        #expect(
+            terminal.trackedChildPID == -1,
+            "reaped pid \(terminal.trackedChildPID) is still live and would be signalled")
+        #expect(!terminal.isAlive)
+
+        // Must stay a no-op rather than signalling whatever now owns that number.
+        terminal.terminate()
+        #expect(terminal.trackedChildPID == -1)
+    }
+
     /// The pty descriptor belongs to the read source, and is released when the stream ends
     /// rather than when the object is deallocated.
     ///
