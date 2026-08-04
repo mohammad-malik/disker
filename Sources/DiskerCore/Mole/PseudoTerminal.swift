@@ -321,10 +321,14 @@ public final class PseudoTerminal: @unchecked Sendable {
     private func waitForExit(pid: pid_t) {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             var info = siginfo_t()
+            var waited = true
             while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 {
-                // An interrupted wait says nothing about the child; anything else means there
-                // is no child left to wait for.
-                if errno != EINTR { return }
+                // An interrupted wait says nothing about the child and is simply resumed;
+                // anything else means there is no child here to wait for.
+                if errno != EINTR {
+                    waited = false
+                    break
+                }
             }
 
             guard let self else {
@@ -336,11 +340,18 @@ public final class PseudoTerminal: @unchecked Sendable {
 
             self.lock.lock()
             var status: Int32 = 0
-            let reaped = waitpid(pid, &status, WNOHANG)
-            if reaped == pid { self.childPID = -1 }
+            let reaped = waited ? waitpid(pid, &status, WNOHANG) : -1
+            // Forgotten either way. Failing to reap it is all the more reason never to signal
+            // that number again, since we no longer know what it refers to.
+            self.childPID = -1
             self.lock.unlock()
 
-            guard reaped == pid else { return }
+            guard reaped == pid else {
+                // Always end on *some* terminal state. Returning quietly here would leave the
+                // sheet showing a run that is still in progress, for ever.
+                self.onStateChange(.failed("Lost track of the process; its result is unknown."))
+                return
+            }
             // Decode wait status: low byte carries the signal, second byte the exit code.
             let exitCode = (status & 0x7F) == 0 ? (status >> 8) & 0xFF : status & 0x7F
             self.onStateChange(.finished(exitCode: exitCode))
