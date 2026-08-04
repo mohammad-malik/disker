@@ -17,6 +17,13 @@
 
 ### Forking Mole
 
+- The pty descriptor lives behind a holder that makes using it and closing it mutually
+  exclusive, instead of being passed around as a bare number. `send`, `resize`, and
+  `interrupt` copied that number under a lock, released the lock, and only then made their
+  syscall — and in that gap the read source's cancel handler could close it. A closed
+  descriptor is a harmless `EBADF`, but the kernel reuses the lowest free number, so a
+  keystroke could land in an unrelated file. This window was opened by the change below,
+  which moved the close from `deinit` to end-of-stream; it is now closed for good.
 - The pty's read source is published before it is resumed, and only ever cancelled under the
   lock. It was assigned *after* `resume()`, so for a command that exited immediately the
   end-of-file handler could run while the reference was still nil — the cancel then did

@@ -1,6 +1,49 @@
 import Darwin
 import Foundation
 
+/// Owns the pty master descriptor, and makes using it and closing it mutually exclusive.
+///
+/// Passing a bare `Int32` around was not enough. Callers copied the number under a lock,
+/// released the lock, and only then made their syscall — and in that gap the read source's
+/// cancel handler could close it. A closed descriptor gives a harmless `EBADF`, but the
+/// kernel reuses the lowest free number, so another thread opening any file in that window
+/// gets the same integer and a keystroke lands in an unrelated file. Holding the descriptor
+/// behind this type means "already closed" is a state the caller cannot fail to observe,
+/// rather than a race it has to win.
+///
+/// The lock is held across the syscall deliberately. The writes are keystrokes and one
+/// `TIOCSWINSZ`, so they do not block in practice, and the alternative — a reference count —
+/// buys nothing for traffic this small.
+///
+/// Internal rather than private so the suite can test the contract directly. The race it
+/// exists to prevent is not reproducible on demand, so the guarantee is pinned here, at the
+/// one place that enforces it, rather than through the terminal above it.
+final class Descriptor: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32
+
+    init(_ fd: Int32) { self.fd = fd }
+
+    /// Runs `body` only while the descriptor is genuinely open. Returns nil once closed.
+    @discardableResult
+    func use<T>(_ body: (Int32) -> T) -> T? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fd >= 0 else { return nil }
+        return body(fd)
+    }
+
+    /// Idempotent, so the cancel handler and a fallback close cannot double-close — which
+    /// would be the same descriptor-reuse bug from the other direction.
+    func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard fd >= 0 else { return }
+        Darwin.close(fd)
+        fd = -1
+    }
+}
+
 /// Runs a command attached to a pseudo-terminal.
 ///
 /// Mole's `clean` command is a full-screen interactive TUI. Handing it a plain pipe is not
@@ -21,7 +64,7 @@ public final class PseudoTerminal: @unchecked Sendable {
         case failed(String)
     }
 
-    private var primaryFD: Int32 = -1
+    private var descriptor: Descriptor?
     private var childPID: pid_t = -1
     private var readSource: DispatchSourceRead?
     private let lock = NSLock()
@@ -44,9 +87,9 @@ public final class PseudoTerminal: @unchecked Sendable {
         if let source = readSource {
             // The source owns the descriptor and closes it from its cancel handler.
             source.cancel()
-        } else if primaryFD >= 0 {
-            // Reading never started, so nothing else will close it.
-            close(primaryFD)
+        } else {
+            // Reading never started, so nothing else will close it. Idempotent either way.
+            descriptor?.close()
         }
     }
 
@@ -148,13 +191,14 @@ public final class PseudoTerminal: @unchecked Sendable {
         }
 
         // Parent.
+        let descriptor = Descriptor(primary)
         lock.lock()
-        primaryFD = primary
+        self.descriptor = descriptor
         childPID = pid
         lock.unlock()
 
         onStateChange(.running)
-        startReading(fd: primary)
+        startReading(primary, descriptor: descriptor)
         waitForExit(pid: pid)
     }
 
@@ -202,12 +246,16 @@ public final class PseudoTerminal: @unchecked Sendable {
         array.deallocate()
     }
 
-    private func startReading(fd: Int32) {
+    private func startReading(_ fd: Int32, descriptor: Descriptor) {
         let source = DispatchSource.makeReadSource(
             fileDescriptor: fd, queue: .global(qos: .userInitiated))
         source.setEventHandler { [weak self] in
             guard let self else { return }
             var buffer = [UInt8](repeating: 0, count: 8192)
+            // The raw descriptor rather than `descriptor.use` deliberately: Dispatch already
+            // guarantees the cancel handler runs only after the last event handler returns,
+            // so this cannot overlap the close — and taking the lock here would hold it
+            // across a read for the benefit of a race that cannot happen.
             let count = read(fd, &buffer, buffer.count)
             // 0 means the child closed the pty; negative is an error. Either way the
             // stream is done and continuing would spin the event source.
@@ -222,7 +270,7 @@ public final class PseudoTerminal: @unchecked Sendable {
         // may already be delivering an event for it, and the number can be reused underneath
         // it. The cancel handler is the one place the runtime guarantees no further delivery,
         // so the source owns the descriptor from here on and nothing else may close it.
-        source.setCancelHandler { close(fd) }
+        source.setCancelHandler { descriptor.close() }
 
         // Published *before* `resume`, and under the lock.
         //
@@ -248,9 +296,9 @@ public final class PseudoTerminal: @unchecked Sendable {
         lock.lock()
         let source = readSource
         readSource = nil
-        // The descriptor is about to be closed, so stop handing it to `send`/`resize`.
-        primaryFD = -1
         lock.unlock()
+        // No need to invalidate the descriptor here: `Descriptor` refuses use once its own
+        // close has run, and that close happens in the cancel handler below.
         // Cancelled outside the lock: cancellation can run handlers, and holding a lock
         // across that invites a deadlock for no benefit.
         source?.cancel()
@@ -266,23 +314,27 @@ public final class PseudoTerminal: @unchecked Sendable {
         }
     }
 
+    /// The descriptor holder, or nil if the process was never started.
+    private var currentDescriptor: Descriptor? {
+        lock.lock()
+        defer { lock.unlock() }
+        return descriptor
+    }
+
     /// Sends keystrokes to the child.
     public func send(_ text: String) {
-        lock.lock()
-        let fd = primaryFD
-        lock.unlock()
-        guard fd >= 0, let data = text.data(using: .utf8) else { return }
-        _ = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        guard let data = text.data(using: .utf8) else { return }
+        currentDescriptor?.use { fd in
+            _ = data.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
+        }
     }
 
     /// Tells the child its window changed, so a TUI can re-lay out.
     public func resize(columns: UInt16, rows: UInt16) {
-        lock.lock()
-        let fd = primaryFD
-        lock.unlock()
-        guard fd >= 0 else { return }
         var size = winsize(ws_row: rows, ws_col: columns, ws_xpixel: 0, ws_ypixel: 0)
-        _ = withUnsafeMutablePointer(to: &size) { ioctl(fd, TIOCSWINSZ, $0) }
+        currentDescriptor?.use { fd in
+            _ = withUnsafeMutablePointer(to: &size) { ioctl(fd, TIOCSWINSZ, $0) }
+        }
     }
 
     /// Interrupts the child, as pressing Ctrl-C in a terminal would.
@@ -295,12 +347,12 @@ public final class PseudoTerminal: @unchecked Sendable {
     /// signals the whole process group so children are not left running.
     public func interrupt() {
         lock.lock()
-        let fd = primaryFD
+        let holder = descriptor
         let pid = childPID
         lock.unlock()
         guard pid > 0 else { return }
 
-        if fd >= 0 {
+        holder?.use { fd in
             var byte: UInt8 = 0x03
             _ = write(fd, &byte, 1)
         }
