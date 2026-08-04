@@ -15,6 +15,25 @@
   drilled to. Inside a home directory it read `Library` as system-wide `/Library` and filed
   `Documents` under "Other", so its swatches disagreed with the wedges they explain.
 
+### Forking Mole
+
+- The child of `forkpty` no longer allocates before `exec`. It was reading
+  `ProcessInfo.processInfo.environment` and calling `strdup` between the fork and the exec,
+  where only async-signal-safe calls are permitted: the child gets one thread but inherits
+  every lock the others held, including the allocator's, and the thread that would release it
+  does not exist there. argv and envp are now built before the fork. No observed failure is
+  attributed to this — an A/B of 20 runs each showed no difference — but the app forks Mole
+  while SwiftUI, the scanner's workers, and Dispatch all have threads running, and a child
+  deadlocked before exec would present as a terminal that opens and stays blank forever.
+- Signals are never sent to a process group that is still our own. `forkpty` makes the child a
+  session leader, but `setsid` runs in the child, and until it has, `getpgid(child)` reports
+  the group it was forked into — ours. A `killpg` in that window would have hit Disker itself
+  and every other child of it.
+- The pty test suite is serialized. `signal(SIGTERM, SIG_IGN)` is process-wide rather than
+  thread-scoped, so tests running in parallel were mutating each other's forked children.
+  Measured 10 failures in 20 parallel runs on a busy machine against 0 in 20 serially, with
+  each test passing 20 in 20 on its own.
+
 ### Breadcrumb
 
 - Right-click any breadcrumb entry for Copy Path and Reveal in Finder; hovering shows the

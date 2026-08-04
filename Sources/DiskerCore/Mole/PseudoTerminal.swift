@@ -54,6 +54,36 @@ public final class PseudoTerminal: @unchecked Sendable {
         columns: UInt16 = 100,
         rows: UInt16 = 30
     ) {
+        // Everything the child needs is built as C strings *before* the fork.
+        //
+        // Between fork and exec the child has one thread but inherits every lock the others
+        // held at the instant of the fork, including the allocator's — and the thread that
+        // would have released it does not exist in the child. POSIX therefore permits only
+        // async-signal-safe calls in that window. The previous version read
+        // `ProcessInfo.processInfo.environment` and called `strdup` there, both of which
+        // allocate.
+        //
+        // Stated honestly: this was found while chasing an unrelated flaky test and an A/B of
+        // 20 runs each showed no difference in that test's failure rate, so it is not the
+        // cause of anything observed. It is fixed because it is undefined behaviour that this
+        // process is well placed to hit — the app forks Mole while SwiftUI, the scanner's
+        // worker pool, and Dispatch all have threads running — and the failure mode, a child
+        // deadlocked before exec, would present as a terminal that opens and stays blank
+        // forever.
+        var childEnvironment = ProcessInfo.processInfo.environment
+        for (key, value) in environment { childEnvironment[key] = value }
+        // Declaring a capable terminal keeps colours and cursor addressing switched on.
+        childEnvironment["TERM"] = "xterm-256color"
+
+        let path = strdup(executable)
+        let argv = Self.makeCArray(([executable] + arguments))
+        let envp = Self.makeCArray(childEnvironment.map { "\($0.key)=\($0.value)" })
+        defer {
+            free(path)
+            Self.freeCArray(argv)
+            Self.freeCArray(envp)
+        }
+
         var size = winsize(ws_row: rows, ws_col: columns, ws_xpixel: 0, ws_ypixel: 0)
         var primary: Int32 = 0
 
@@ -67,8 +97,9 @@ public final class PseudoTerminal: @unchecked Sendable {
         }
 
         if pid == 0 {
-            // Child. Only async-signal-safe work belongs here; anything that allocates or
-            // takes a lock can deadlock against state held by the parent at fork time.
+            // Child. Every call below is async-signal-safe -- `signal`, `sigemptyset`,
+            // `sigprocmask`, `execve`, `_exit`. Nothing here allocates, and nothing touches
+            // Swift or Foundation. Keep it that way.
 
             // Hand the child a clean signal environment.
             //
@@ -89,23 +120,7 @@ public final class PseudoTerminal: @unchecked Sendable {
             sigemptyset(&empty)
             sigprocmask(SIG_SETMASK, &empty, nil)
 
-            var env = ProcessInfo.processInfo.environment
-            for (key, value) in environment { env[key] = value }
-            // Declaring a capable terminal keeps colours and cursor addressing switched on.
-            env["TERM"] = "xterm-256color"
-
-            let envStrings = env.map { "\($0.key)=\($0.value)" }
-            var envPointers: [UnsafeMutablePointer<CChar>?] = envStrings.map {
-                strdup($0)
-            }
-            envPointers.append(nil)
-
-            var argPointers: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map {
-                strdup($0)
-            }
-            argPointers.append(nil)
-
-            execve(executable, &argPointers, &envPointers)
+            execve(path, argv, envp)
             // Only reached if exec failed; _exit rather than exit to skip atexit handlers
             // inherited from the parent.
             _exit(127)
@@ -120,6 +135,39 @@ public final class PseudoTerminal: @unchecked Sendable {
         onStateChange(.running)
         startReading(fd: primary)
         waitForExit(pid: pid)
+    }
+
+    /// The child's process group, but only once it is genuinely its own group leader.
+    ///
+    /// `forkpty` makes the child a session leader, so its pid doubles as its group id — but
+    /// `setsid` runs *in the child*, and until it has, `getpgid` reports the group the child
+    /// was forked into, which is ours. Signalling that group means signalling this process
+    /// and every other child of it. Returning nil for that window lets callers fall back to
+    /// signalling the single pid, which is always safe.
+    private func ownGroup(of pid: pid_t) -> pid_t? {
+        let group = getpgid(pid)
+        guard group > 0, group != getpgid(0) else { return nil }
+        return group
+    }
+
+    /// Builds a NULL-terminated `char *[]`, as `execve` wants it.
+    private static func makeCArray(_ values: [String])
+        -> UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+    {
+        let array = UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>
+            .allocate(capacity: values.count + 1)
+        for (index, value) in values.enumerated() { array[index] = strdup(value) }
+        array[values.count] = nil
+        return array
+    }
+
+    private static func freeCArray(_ array: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) {
+        var index = 0
+        while let element = array[index] {
+            free(element)
+            index += 1
+        }
+        array.deallocate()
     }
 
     private func startReading(fd: Int32) {
@@ -190,9 +238,7 @@ public final class PseudoTerminal: @unchecked Sendable {
             _ = write(fd, &byte, 1)
         }
 
-        // forkpty makes the child a session leader, so its pid is also its group id.
-        let group = getpgid(pid)
-        if group > 0 {
+        if let group = ownGroup(of: pid) {
             killpg(group, SIGINT)
         } else {
             kill(pid, SIGINT)
@@ -250,8 +296,7 @@ public final class PseudoTerminal: @unchecked Sendable {
         let pid = childPID
         lock.unlock()
         guard pid > 0 else { return }
-        let group = getpgid(pid)
-        if group > 0 { killpg(group, signal) } else { kill(pid, signal) }
+        if let group = ownGroup(of: pid) { killpg(group, signal) } else { kill(pid, signal) }
     }
 
     public func terminate() {
@@ -262,7 +307,6 @@ public final class PseudoTerminal: @unchecked Sendable {
         guard pid > 0 else { return }
         // Whole group, for the same reason interrupt() does: leaving Mole's helpers running
         // after the window closed would keep deleting with nothing on screen to show it.
-        let group = getpgid(pid)
-        if group > 0 { killpg(group, SIGTERM) } else { kill(pid, SIGTERM) }
+        if let group = ownGroup(of: pid) { killpg(group, SIGTERM) } else { kill(pid, SIGTERM) }
     }
 }

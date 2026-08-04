@@ -163,6 +163,29 @@ cursor addressing; stripping ANSI escapes and appending stacks every frame on to
 `TerminalEmulator` maintains a real character grid with bounded scrollback, and ignores the
 alternate screen buffer for history so a menu's repaints do not accumulate.
 
+**The child of a fork may not allocate.** Between `fork` and `exec` the child has one thread
+but inherits every lock the others held at that instant — including the allocator's, whose
+owning thread does not exist in the child to release it. Only async-signal-safe calls are
+legal there, so argv and envp are built *before* the fork and the child does nothing but
+`signal`, `sigemptyset`, `sigprocmask`, `execve`, `_exit`. Anything added to that block must
+keep it that way; the failure mode is not a crash but a child wedged forever before exec,
+which looks like a terminal that opens and never prints.
+
+**Never signal a process group that might still be our own.** `forkpty` makes the child a
+session leader, so its pid doubles as its group id — but `setsid` runs *in the child*, and
+until it has, `getpgid(child)` returns the group the child was forked into, which is ours.
+`killpg` on that would signal Disker and every other child. `ownGroup(of:)` returns nil for
+that window and callers fall back to signalling the single pid.
+
+**The pty tests are `.serialized`.** `signal(SIGTERM, SIG_IGN)` is process-wide, not
+thread-scoped, and swift-testing parallelises by default — so one test's global mutation
+landed on another test's forked child. In parallel the suite failed 10 runs in 20 on a loaded
+machine and about 1 in 20 idle; serially, 0 in 20; each test alone, 20 in 20. A failing child
+died immediately after the fork with wait status 9 (`SIGKILL`) and an empty transcript, and
+it was not memory pressure — no jetsam entries, 47% of memory free. **What sent that SIGKILL
+was never identified**; pinning it down needs `dtrace` and root. Answer that before making
+this suite parallel again.
+
 **Children get default signal dispositions before `exec`.** launchd starts GUI apps with
 `SIGTERM` set to `SIG_IGN`, and unlike an installed handler — which `exec` resets — an ignored
 disposition survives `execve`. Mole wraps part of its work in a shell timeout that spawns a
