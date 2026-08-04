@@ -98,6 +98,13 @@ struct RecommendationBar: View {
 /// Category legend under the chart.
 struct CategoryLegend: View {
     let root: FileNode?
+    /// Path components from the scan root down to `root`.
+    ///
+    /// Must match what the chart was built with. Classifying on the bare child name alone
+    /// gave the legend a different answer from the wedges above it once drilled in: inside a
+    /// home directory it read `Library` as system-wide `/Library` and filed `Documents` under
+    /// "Other", so the swatches disagreed with the colours they were supposed to explain.
+    var rootComponents: [String] = []
 
     var body: some View {
         HStack(spacing: 18) {
@@ -122,7 +129,7 @@ struct CategoryLegend: View {
         guard let root else { return [] }
         var sums: [StorageCategory: UInt64] = [:]
         for child in root.children {
-            let category = StorageCategory.classify(components: [child.name])
+            let category = StorageCategory.classify(components: rootComponents + [child.name])
             sums[category, default: 0] &+= child.size
         }
         return sums.sorted { $0.value > $1.value }.map { (category: $0.key, size: $0.value) }

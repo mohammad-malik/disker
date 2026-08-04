@@ -181,6 +181,13 @@ inheritance left orphaned processes that no `SIGTERM` could reach.
   the window handed it every mouse event first, and `NSView` forwards the wheel up the responder
   chain rather than across to the scroll view beside it — so the transcript could not be
   scrolled. Focus is kept with a local click monitor instead.
+- **The drill stack must never skip a level.** `AppModel.drillPath` is the only record of
+  where the chart is, so breadcrumbs, absolute paths, and category colours are all derived
+  from it. Drilling into an outer ring moves several levels at once, and appending only the
+  clicked node lost the ones in between — one double-click then produced a breadcrumb missing
+  a folder, a grey chart (classification never saw the `Users` prefix), and a path that
+  pointed at nothing. `FileNode.chain(to:)` returns the whole descent, and everything that
+  classifies a path takes `rootComponents` so the legend cannot disagree with the wedges.
 - Recommendation rows are backed by `List`. An earlier `LazyVStack` version with a computed
   `displayPath` recalculated per row per render pushed the app to 70–90% CPU and 3 GB of memory.
 

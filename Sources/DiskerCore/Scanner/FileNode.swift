@@ -85,6 +85,27 @@ public final class FileNode: Sendable, Codable {
         (flags.contains(.inaccessible) ? 1 : 0)
             + children.reduce(0) { $0 + $1.inaccessibleCount }
     }
+
+    /// Follows `components` down from this node, returning **every** node passed through
+    /// rather than only the destination.
+    ///
+    /// The intermediate nodes are the point. A chart wedge several rings out is several
+    /// levels below the chart's root, and the drill stack has to gain all of them at once —
+    /// it is what breadcrumbs, path reconstruction, and category colouring are derived from,
+    /// so a stack that skips a level is wrong everywhere at once rather than just visually.
+    ///
+    /// Returns `nil` if any component is missing, which happens when the tree has been
+    /// rebuilt by a re-scan under a stale selection.
+    public func chain(to components: some Sequence<String>) -> [FileNode]? {
+        var cursor = self
+        var visited: [FileNode] = []
+        for name in components {
+            guard let next = cursor.children.first(where: { $0.name == name }) else { return nil }
+            visited.append(next)
+            cursor = next
+        }
+        return visited
+    }
 }
 
 extension FileNode {

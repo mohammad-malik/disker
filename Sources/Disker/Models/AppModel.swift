@@ -251,20 +251,37 @@ final class AppModel {
         NSWorkspace.shared.open(FullDiskAccess.settingsURL)
     }
 
+    /// Path components from the scan root down to whatever the chart is currently centred on.
+    ///
+    /// The first entry of `drillPath` is the scan root itself, whose name ("Data") is not a
+    /// component of any path below it.
+    var rootComponents: [String] { drillPath.dropFirst().map(\.name) }
+
     func rebuildSegments() {
         guard let root = currentRoot else {
             segments = []
             return
         }
-        segments = SunburstLayout.build(
-            root: root,
-            rootComponents: drillPath.dropFirst().map(\.name)
-        )
+        segments = SunburstLayout.build(root: root, rootComponents: rootComponents)
     }
 
-    func drillDown(into node: FileNode) {
-        guard node.isDirectory, !node.children.isEmpty else { return }
-        drillPath.append(node)
+    /// Drills into a wedge, keeping every level between here and it.
+    ///
+    /// Takes the segment rather than its node because a node alone does not say where it
+    /// sits. Wedges on the outer rings are several levels below the chart's root, and
+    /// appending only the clicked node silently dropped its ancestors from `drillPath` —
+    /// which is the stack that breadcrumbs, absolute paths, and category colouring are all
+    /// derived from. Double-clicking `mohammadmalik` on ring 1 produced a breadcrumb reading
+    /// "Data > mohammadmalik", coloured every folder under it grey because the path no longer
+    /// began with `Users`, and handed `/System/Volumes/Data/mohammadmalik` to Reveal in
+    /// Finder, Copy Path, and Move to Trash.
+    func drillDown(into segment: SunburstSegment) {
+        guard segment.node.isDirectory, !segment.node.children.isEmpty else { return }
+        guard let root = currentRoot,
+            let chain = root.chain(to: segment.components.dropFirst(rootComponents.count)),
+            !chain.isEmpty
+        else { return }
+        drillPath.append(contentsOf: chain)
         selectedSegment = nil
         hoveredSegment = nil
         rebuildSegments()
@@ -281,20 +298,45 @@ final class AppModel {
     /// Absolute path for a segment, rebuilt from the drill stack plus the segment's own
     /// components.
     func absolutePath(for segment: SunburstSegment) -> String {
-        let base = drillPath.dropFirst().map(\.name)
-        let combined = base + segment.components.dropFirst(base.count)
-        return ([scanRoot] + combined).joined(separator: "/").replacingOccurrences(
-            of: "//", with: "/")
+        let base = rootComponents
+        return path(joining: base + segment.components.dropFirst(base.count))
+    }
+
+    /// Absolute path of the breadcrumb entry at `index`, i.e. of `drillPath[index]`.
+    func absolutePath(forDepth index: Int) -> String {
+        path(joining: drillPath.prefix(index + 1).dropFirst().map(\.name))
+    }
+
+    /// A volume mounted at `/` makes `scanRoot` a lone slash, which would otherwise join into
+    /// a doubled separator.
+    private func path(joining components: some Sequence<String>) -> String {
+        ([scanRoot] + components).joined(separator: "/")
+            .replacingOccurrences(of: "//", with: "/")
     }
 
     func revealInFinder(_ segment: SunburstSegment) {
-        let path = absolutePath(for: segment)
-        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+        reveal(path: absolutePath(for: segment))
     }
 
     func copyPath(_ segment: SunburstSegment) {
+        copy(path: absolutePath(for: segment))
+    }
+
+    func revealInFinder(depth index: Int) {
+        reveal(path: absolutePath(forDepth: index))
+    }
+
+    func copyPath(depth index: Int) {
+        copy(path: absolutePath(forDepth: index))
+    }
+
+    private func reveal(path: String) {
+        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)])
+    }
+
+    private func copy(path: String) {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(absolutePath(for: segment), forType: .string)
+        NSPasteboard.general.setString(path, forType: .string)
     }
 
     /// Shows the last preview immediately, and only asks Mole again when it has gone stale.

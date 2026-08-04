@@ -45,7 +45,7 @@ struct SunburstView: View {
                                     reduceMotion
                                         ? nil : .spring(response: 0.4, dampingFraction: 0.85)
                                 ) {
-                                    model.drillDown(into: hit.node)
+                                    model.drillDown(into: hit)
                                 }
                             } else {
                                 model.selectedSegment = hit

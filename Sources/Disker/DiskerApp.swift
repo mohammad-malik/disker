@@ -199,7 +199,7 @@ struct ContentView: View {
                     "Scan failed", systemImage: "exclamationmark.triangle", description: Text(message))
             case .loaded, .idle:
                 SunburstView(model: model)
-                CategoryLegend(root: model.currentRoot)
+                CategoryLegend(root: model.currentRoot, rootComponents: model.rootComponents)
                     .padding(.bottom, 6)
             }
         }
@@ -240,6 +240,13 @@ struct ContentView: View {
                 .buttonStyle(.plain)
                 .font(index == model.breadcrumb.count - 1 ? .headline : .subheadline)
                 .foregroundStyle(index == model.breadcrumb.count - 1 ? .primary : .secondary)
+                // The breadcrumb is where the current location is named, so it is where
+                // people reach for its path. Same two actions as the chart's own menu.
+                .contextMenu {
+                    Button("Copy Path") { model.copyPath(depth: index) }
+                    Button("Reveal in Finder") { model.revealInFinder(depth: index) }
+                }
+                .help(model.absolutePath(forDepth: index))
             }
             Spacer()
         }

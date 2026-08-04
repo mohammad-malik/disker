@@ -52,6 +52,49 @@ struct FileNodeTests {
         #expect(dir.children.map(\.name) == ["big", "medium", "small"])
     }
 
+    /// Drilling into an outer ring jumps several levels at once, and every level has to
+    /// arrive in the drill stack. When only the clicked node was appended, the chart lost
+    /// track of where it was: the breadcrumb skipped a folder, categories were classified
+    /// from a path missing its prefix so a home directory came out entirely grey, and the
+    /// absolute path handed to Reveal in Finder and Move to Trash pointed at nothing.
+    @Test("Descending a path yields every level, not just the destination")
+    func chainKeepsIntermediateLevels() throws {
+        let library = FileNode(
+            name: "Library", size: 300, kind: .directory,
+            children: [FileNode(name: "Caches", size: 300, kind: .directory)], fileCount: 1)
+        let home = FileNode(
+            name: "alex", size: 300, kind: .directory, children: [library], fileCount: 1)
+        let users = FileNode(
+            name: "Users", size: 300, kind: .directory, children: [home], fileCount: 1)
+        let root = FileNode(
+            name: "Data", size: 300, kind: .directory, children: [users], fileCount: 1)
+
+        let chain = try #require(root.chain(to: ["Users", "alex", "Library"]))
+
+        #expect(chain.map(\.name) == ["Users", "alex", "Library"])
+        // A grey home directory was exactly this: classifying ["alex", ...] rather than
+        // ["Users", "alex", ...], which falls through to `.other` for everything.
+        #expect(StorageCategory.classify(components: chain.map(\.name)) == .system)
+    }
+
+    @Test("Descending an empty path stays where it is")
+    func chainOfNothing() {
+        let root = FileNode(name: "Data", size: 0, kind: .directory)
+        #expect(root.chain(to: [String]())?.isEmpty == true)
+    }
+
+    /// Happens when a re-scan replaces the tree while a wedge from the old one is selected.
+    /// Returning a partial chain would drill somewhere the user did not click.
+    @Test("A path that no longer exists resolves to nothing")
+    func chainRejectsMissingComponents() {
+        let users = FileNode(name: "Users", size: 100, kind: .directory)
+        let root = FileNode(
+            name: "Data", size: 100, kind: .directory, children: [users], fileCount: 1)
+
+        #expect(root.chain(to: ["Users", "gone"]) == nil)
+        #expect(root.chain(to: ["Applications"]) == nil)
+    }
+
     @Test("Inaccessible directories are counted through the tree")
     func inaccessibleCountPropagates() {
         let blocked = FileNode(name: "blocked", size: 0, kind: .directory, flags: .inaccessible)

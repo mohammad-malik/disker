@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Drilling into an outer ring no longer loses its way
+
+- Double-clicking a wedge on any ring but the innermost appended only that wedge to the
+  drill stack, discarding every folder between it and the chart's root. Since that stack is
+  what breadcrumbs, absolute paths, and category colours are all derived from, one
+  double-click broke all three at once: the breadcrumb read "Data > mohammadmalik" with
+  `Users` missing, the whole home directory turned grey because classification no longer saw
+  a path starting with `Users`, and Reveal in Finder, Copy Path, and Move to Trash were
+  handed `/System/Volumes/Data/mohammadmalik`, which does not exist.
+- The legend under the chart classified on the bare folder name, ignoring where the chart was
+  drilled to. Inside a home directory it read `Library` as system-wide `/Library` and filed
+  `Documents` under "Other", so its swatches disagreed with the wedges they explain.
+
+### Breadcrumb
+
+- Right-click any breadcrumb entry for Copy Path and Reveal in Finder; hovering shows the
+  full path.
+
 ## v1.1.1 — 2026-08-02
 
 ### Mole's preview no longer blocks every launch
