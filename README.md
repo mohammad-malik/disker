@@ -8,6 +8,9 @@ Then it points out what is actually safe to delete.
 
 ![Disker showing a full-volume scan as a sunburst chart](docs/screenshot.png)
 
+<sub>Shown in dark appearance — [here it is in light](docs/screenshot-light.png). Disker follows your
+system setting, or you can pin one in Settings.</sub>
+
 ## What you get
 
 - **A picture of your whole disk.** Every folder sized in one pass, drawn as a sunburst where
