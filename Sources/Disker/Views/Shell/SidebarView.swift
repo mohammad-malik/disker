@@ -34,6 +34,10 @@ struct SidebarView: View {
                 }
             }
         }
+        // The split view's sidebar item brings the vibrancy; the list must not paint over
+        // it. This is the one background removal that matters — with the list drawing its
+        // own, the desktop stops at the hosting view and the sidebar goes flat.
+        .scrollContentBackground(.hidden)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 Divider()

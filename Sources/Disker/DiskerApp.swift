@@ -1,3 +1,4 @@
+import AppKit
 import DiskerCore
 import SwiftUI
 
@@ -26,36 +27,11 @@ struct DiskerApp: App {
 struct ContentView: View {
     @Bindable var model: AppModel
     @Bindable var appearance: AppearanceController
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
-    /// Shared by every glass shape floating over the chart, so they can morph into one
-    /// another as the breadcrumb grows and shrinks.
-    @Namespace private var glassNamespace
 
     var body: some View {
-        // No window background, no container background, no hidden toolbar background.
-        // Liquid Glass is drawn by the system chrome — the toolbar, the inset sidebar, the
-        // inspector — and every custom background previously installed here was painting
-        // over the material rather than giving it something to refract.
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
-        } detail: {
-            detail
-        }
-        // Deliberately no window-level backdrop and no `isOpaque = false`.
-        //
-        // Four approaches at behind-window translucency were tried and none reached the
-        // screen: clearing `NSWindow.backgroundColor`, a `.behindWindow` `NSVisualEffectView`
-        // installed through `containerBackground(for: .window)`, hiding the sidebar list's
-        // scroll background so that backdrop could show through, and a SwiftUI
-        // `.ultraThinMaterial` as the window's container background. `NavigationSplitView`
-        // paints opaque column backgrounds above all of them, and SwiftUI exposes no way to
-        // opt out — the same wall the previous author hit and documented.
-        //
-        // Getting the desktop to show through the sidebar means an `NSSplitViewController`
-        // with an `NSVisualEffectView` behind it, which is a shell rewrite rather than a
-        // theming change. Until that is a deliberate decision, this stays opaque and the
-        // glass does its work against the app's own content.
+        // AppKit, not `NavigationSplitView` — see `SplitShell` for the four SwiftUI
+        // routes to behind-window translucency that all ended up under an opaque pane.
+        SplitShell(model: model)
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
@@ -114,6 +90,9 @@ struct ContentView: View {
     }
 
     /// Whether the current section has anything for the inspector to describe.
+    ///
+    /// Mirrors `DetailView`'s own check; the toolbar needs it to decide whether the toggle
+    /// should be present at all.
     private var sectionSupportsInspector: Bool {
         switch model.section {
         case .overview, .location: return true
@@ -121,155 +100,19 @@ struct ContentView: View {
         }
     }
 
-    /// Keeps the user's preference in `showsInspector` while suppressing the panel in the
-    /// sections that have nothing to put in it.
-    private var inspectorPresented: Binding<Bool> {
-        Binding(
-            get: { model.showsInspector && sectionSupportsInspector },
-            set: { model.showsInspector = $0 })
-    }
-
-    @ViewBuilder
-    private var detail: some View {
-        Group {
-            switch model.section {
-            case .overview, .location:
-                chart
-            case .recommendations:
-                RecommendationsPanel(model: model)
-            case .mole:
-                MoleView(model: model)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // The content layer is opaque even though the window is not. Figures over a chart
-        // have to stay readable regardless of what is behind the window, and Apple's split
-        // is exactly this: standard materials for content, Liquid Glass for the chrome
-        // floating above it.
-        .background(.background)
-        // Transient, and above the content rather than part of it — so this is one of the
-        // few things that stays glass.
-        .overlay(alignment: .top) {
-            if let error = model.lastError {
-                errorBanner(error)
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        .animation(.spring(response: 0.35, dampingFraction: 0.9), value: model.lastError)
-        // The system's inspector, not a hand-rolled panel: it comes with edge-to-edge
-        // Liquid Glass, its own resizing, and the standard column behaviour.
-        .inspector(isPresented: inspectorPresented) {
-            InspectorView(model: model)
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
-        }
-        .sheet(isPresented: $model.showingAccessSheet) {
-            FullDiskAccessSheet(model: model)
-        }
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer()
-            Button("Dismiss") { model.lastError = nil }
-                .buttonStyle(.borderless)
-        }
-        .padding(12)
-        .floatingGlass(in: .rect(cornerRadius: 14))
-    }
-
-    /// The chart, and the handful of controls that float above it.
-    ///
-    /// This is the app's one legitimate use of custom Liquid Glass: a rich canvas with
-    /// controls over it. They share a single `GlassEffectContainer` so they render in one
-    /// sampling pass — glass cannot sample other glass — and so a hover on one carries its
-    /// illumination to the others. The spacing stays well under the real separation between
-    /// the three groups; larger, and they would blend into one shape at rest.
-    private var chart: some View {
-        GlassEffectContainer(spacing: 12) {
-            chartContent
-                .overlay(alignment: .topLeading) {
-                    // Empty on a first-run scan, and an empty row of capsules is just a
-                    // glass artefact floating over a spinner.
-                    if !model.breadcrumb.isEmpty {
-                        BreadcrumbBar(model: model, namespace: glassNamespace)
-                            .padding(.horizontal, 16)
-                            .padding(.top, 12)
-                    }
-                }
-                .overlay(alignment: .bottom) {
-                    VStack(spacing: 12) {
-                        // The legend belongs with the floating controls rather than in the
-                        // content: laid out below the chart it forced the chart to shrink,
-                        // which opened the dead band the bars were floating over.
-                        if model.currentRoot != nil {
-                            CategoryLegend(
-                                root: model.currentRoot,
-                                rootComponents: model.rootComponents
-                            )
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 10)
-                            .floatingGlass(in: Capsule())
-                        }
-                        // Only on the chart: the other sections already show this in full,
-                        // and repeating it below them is noise.
-                        if case .overview = model.section {
-                            RecommendationBar(model: model)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 14)
-                }
-        }
-    }
-
-    @ViewBuilder
-    private var chartContent: some View {
-        switch model.scanState {
-        case .scanning(let progress):
-            scanningState(progress)
-        case .failed(let message):
-            ContentUnavailableView(
-                "Scan failed", systemImage: "exclamationmark.triangle",
-                description: Text(message))
-        case .loaded, .idle:
-            // Full bleed. The previous version reserved space above and below for the
-            // floating controls, which meant the chart never actually passed beneath them —
-            // so the glass had a flat pane to lens and looked like a dark card. Content
-            // running under the material is the entire effect.
-            // Enough inset to keep the chart off the pane edges, not so much that it stops
-            // reaching under the floating controls.
-            SunburstView(model: model, namespace: glassNamespace)
-                .padding(26)
-        }
-    }
-
-    private func scanningState(_ progress: ScanProgress?) -> some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.large)
-            Text(progress.map { "\($0.filesScanned.formatted()) files" } ?? "Starting…")
-                .font(.headline)
-            if let progress {
-                Text(progress.currentPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 420)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            // `NavigationSplitView` supplied this for free; an AppKit split view does not.
+            Button {
+                NSSplitViewController.toggleSidebarFromToolbar()
+            } label: {
+                Label("Toggle Sidebar", systemImage: "sidebar.leading")
+            }
+            .help("Show or hide the sidebar")
+            .accessibilityLabel("Show or hide the sidebar")
+        }
+
         ToolbarItem(placement: .navigation) {
             // The disk picker from the design mock. Always present, even with one disk:
             // it names what you are looking at, which the window title alone stops doing
