@@ -42,6 +42,12 @@ struct SplitShell: NSViewControllerRepresentable {
         sidebarItem.minimumThickness = 200
         sidebarItem.maximumThickness = 320
         sidebarItem.canCollapse = true
+        // A full-height sidebar splits the titlebar into two regions, so leading toolbar
+        // items are laid out after the sidebar and slide sideways every time it collapses.
+        // Keeping the sidebar below the titlebar leaves one continuous region, which pins
+        // those items next to the traffic lights.
+        sidebarItem.allowsFullHeightLayout = false
+        sidebarItem.titlebarSeparatorStyle = .none
 
         let detailHost = NSHostingController(rootView: DetailView(model: model))
         let detailItem = NSSplitViewItem(viewController: detailHost)

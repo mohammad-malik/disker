@@ -102,28 +102,31 @@ struct DetailView: View {
                             .padding(.top, 12)
                     }
                 }
-                .overlay(alignment: .bottom) {
-                    VStack(spacing: 12) {
-                        // The legend belongs with the floating controls rather than in the
-                        // content: laid out below the chart it forced the chart to shrink,
-                        // which opened the dead band the bars were floating over.
-                        if model.currentRoot != nil {
-                            CategoryLegend(
-                                root: model.currentRoot,
-                                rootComponents: model.rootComponents
-                            )
-                            .padding(.horizontal, 18)
-                            .padding(.vertical, 10)
-                            .floatingGlass(in: Capsule())
-                        }
-                        // Only on the chart: the other sections already show this in full,
-                        // and repeating it below them is noise.
-                        if case .overview = model.section {
-                            RecommendationBar(model: model)
-                        }
+                // Top-trailing, not over the middle of the chart. The chart is a circle in a
+                // wide pane, so this corner is dead space — where the legend sat before it
+                // covered live wedges for no reason, and glass over saturated colour turns
+                // muddy rather than lensing anything useful.
+                .overlay(alignment: .topTrailing) {
+                    if model.currentRoot != nil {
+                        CategoryLegend(
+                            root: model.currentRoot,
+                            rootComponents: model.rootComponents
+                        )
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .floatingGlass(in: Capsule())
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 14)
+                }
+                .overlay(alignment: .bottom) {
+                    // Only on the chart: the other sections already show this in full,
+                    // and repeating it below them is noise.
+                    if case .overview = model.section {
+                        RecommendationBar(model: model)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 14)
+                    }
                 }
         }
     }
