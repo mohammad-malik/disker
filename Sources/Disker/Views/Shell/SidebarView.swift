@@ -52,7 +52,10 @@ struct SidebarView: View {
         Binding(
             get: { model.section },
             set: { newValue in
-                guard let newValue else { return }
+                // The equality check is defensive: `List` can hand back the current
+                // selection during reconciliation, and re-running `openLocation` would
+                // throw away the drill-down the user had navigated to.
+                guard let newValue, newValue != model.section else { return }
                 model.section = newValue
                 if case .location(let name) = newValue {
                     model.openLocation(named: name)

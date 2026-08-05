@@ -54,7 +54,24 @@ final class AppModel {
     var section: Section = .overview
     /// The inspector is collapsible; the chart is the point of the window and deserves the
     /// space on a laptop display.
+    ///
+    /// This is the user's *preference*, not whether the panel is on screen — sections with
+    /// nothing to inspect suppress it without disturbing the preference. Read
+    /// `sectionSupportsInspector` alongside it rather than clearing this.
     var showsInspector = true
+
+    /// Whether the current section has anything for the inspector to describe.
+    ///
+    /// Lives here because the detail view, the toolbar, and the View menu all need the same
+    /// answer. It was duplicated across two of them, and the third never got the check at
+    /// all — which is how the menu ended up offering "Hide Details" in sections that have
+    /// no details to hide.
+    var sectionSupportsInspector: Bool {
+        switch section {
+        case .overview, .location: return true
+        case .recommendations, .mole: return false
+        }
+    }
 
     let moleSession = MoleSession()
     var moleConfiguration = MoleConfiguration()

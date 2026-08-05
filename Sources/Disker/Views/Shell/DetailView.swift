@@ -52,20 +52,21 @@ struct DetailView: View {
         }
     }
 
-    /// Whether the current section has anything for the inspector to describe.
-    private var sectionSupportsInspector: Bool {
-        switch model.section {
-        case .overview, .location: return true
-        case .recommendations, .mole: return false
-        }
-    }
-
     /// Keeps the user's preference in `showsInspector` while suppressing the panel in the
     /// sections that have nothing to put in it.
+    ///
+    /// The setter has to ignore writes from the suppressed sections. The getter reports
+    /// `false` there regardless of the preference, and SwiftUI writes that observed value
+    /// back through the binding — which used to overwrite `showsInspector` with `false`.
+    /// Visiting Recommendations and returning to the chart silently lost a panel the user
+    /// had open, with no way to tell what had turned it off.
     private var inspectorPresented: Binding<Bool> {
         Binding(
-            get: { model.showsInspector && sectionSupportsInspector },
-            set: { model.showsInspector = $0 })
+            get: { model.showsInspector && model.sectionSupportsInspector },
+            set: { newValue in
+                guard model.sectionSupportsInspector else { return }
+                model.showsInspector = newValue
+            })
     }
 
     private func errorBanner(_ message: String) -> some View {

@@ -35,7 +35,6 @@ struct SplitShell: NSViewControllerRepresentable {
     /// for, which `NavigationSplitView` would not give up.
     func makeNSViewController(context: Context) -> NSSplitViewController {
         let split = NSSplitViewController()
-        ShellRegistry.split = split
 
         let sidebarHost = NSHostingController(rootView: SidebarView(model: model))
         let sidebarItem = NSSplitViewItem(
@@ -94,30 +93,50 @@ struct SplitShell: NSViewControllerRepresentable {
     }
 }
 
-/// Holds the live split controller so the sidebar can be toggled from anywhere.
-///
-/// Neither of the obvious routes works. `NSApp.sendAction(#selector(toggleSidebar(_:)))` and
-/// `firstResponder.tryToPerform(...)` both walk the responder chain, and the first responder
-/// here lives inside the sidebar's own list — so collapsing the sidebar removes it from the
-/// chain and every later send has nothing to deliver to. That is the bug where the sidebar
-/// closed once and could never be reopened. Walking down from
-/// `window.contentViewController` does not work either: SwiftUI does not necessarily install
-/// a representable's controller as a child in that tree.
-///
-/// A weak reference set at construction sidesteps all of it.
-@MainActor
-enum ShellRegistry {
-    static weak var split: NSSplitViewController?
-}
-
 extension NSSplitViewController {
-    /// Collapses or expands the sidebar. `NavigationSplitView` supplied this control for
-    /// free; an AppKit split view does not.
+    /// Collapses or expands the front window's sidebar. `NavigationSplitView` supplied this
+    /// control for free; an AppKit split view does not.
+    ///
+    /// Two obvious routes are wrong. `NSApp.sendAction(#selector(toggleSidebar(_:)))` and
+    /// `firstResponder.tryToPerform(...)` both walk the responder chain, and the first
+    /// responder here lives inside the sidebar's own list — so collapsing the sidebar takes
+    /// it out of the chain and every later invocation has nothing to deliver to. That was
+    /// the bug where the sidebar closed once and could never be reopened. Walking down
+    /// `window.contentViewController.children` fails too: SwiftUI does not necessarily
+    /// install a representable's controller as a child of that tree.
+    ///
+    /// A global holding the last-created controller does work, but it is wrong with more
+    /// than one window — every new window overwrites it, so the front window's toolbar can
+    /// end up toggling a different window's sidebar. Resolving from the key window's view
+    /// tree keeps the action scoped to the window the user is actually looking at.
     static func toggleSidebarFromToolbar() {
-        guard let sidebar = ShellRegistry.split?.splitViewItems.first else { return }
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow,
+            let split = window.contentView?.enclosingSplitViewController,
+            let sidebar = split.splitViewItems.first
+        else { return }
+
         NSAnimationContext.runAnimationGroup { context in
             context.allowsImplicitAnimation = true
             sidebar.animator().isCollapsed.toggle()
         }
+    }
+}
+
+extension NSView {
+    /// The controller of the first `NSSplitView` in this subtree.
+    ///
+    /// Goes through the *view* hierarchy rather than the view-controller hierarchy, since
+    /// that is the one SwiftUI is guaranteed to have installed. `NSSplitViewController`
+    /// makes itself its split view's delegate, which is what makes this resolvable.
+    var enclosingSplitViewController: NSSplitViewController? {
+        if let split = self as? NSSplitView,
+            let controller = split.delegate as? NSSplitViewController
+        {
+            return controller
+        }
+        for subview in subviews {
+            if let found = subview.enclosingSplitViewController { return found }
+        }
+        return nil
     }
 }

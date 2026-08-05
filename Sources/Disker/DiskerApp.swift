@@ -89,17 +89,6 @@ struct ContentView: View {
         }
     }
 
-    /// Whether the current section has anything for the inspector to describe.
-    ///
-    /// Mirrors `DetailView`'s own check; the toolbar needs it to decide whether the toggle
-    /// should be present at all.
-    private var sectionSupportsInspector: Bool {
-        switch model.section {
-        case .overview, .location: return true
-        case .recommendations, .mole: return false
-        }
-    }
-
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
@@ -161,7 +150,7 @@ struct ContentView: View {
         // control. Dropping the whole item — rather than filling it with an EmptyView —
         // is what keeps an empty capsule from being left behind in the sections that have
         // no inspector.
-        if sectionSupportsInspector {
+        if model.sectionSupportsInspector {
             ToolbarSpacer(.fixed, placement: .primaryAction)
 
             ToolbarItem(placement: .primaryAction) {
