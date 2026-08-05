@@ -35,78 +35,66 @@ extension Color {
     }
 }
 
-/// Surface treatment for the floating panels.
+/// The app's only custom Liquid Glass.
 ///
-/// This is deliberately thin. An earlier version hand-painted specular gradients, rim
-/// highlights, and coloured light pools behind everything — that is 2015-era glassmorphism,
-/// and it fought the real material rather than using it. Liquid Glass already does the
-/// lensing, the edge specular, and the adaptive tinting; layering fake highlights on top
-/// only muddies it.
+/// Liquid Glass is a *functional layer* that floats above content — toolbars, sidebars,
+/// navigation. Apple's rule is that it does not belong in the content layer, and everything
+/// the system already draws in glass (toolbar, sidebar, inspector, sheets) is left alone to
+/// do so. What remains for us is the one genuine case this app has: the controls that float
+/// over the sunburst canvas.
 ///
-/// So the rule here: `.glassEffect` does the work, and this modifier adds nothing beyond a
-/// shadow for elevation and an opaque fallback for Reduce Transparency. Anything that looks
-/// like glass should come from the material, not from a gradient.
-struct GlassPanel: ViewModifier {
+/// The material produces its own lensing, specular edge, adaptive shadow and tone-mapped
+/// tint. So this modifier deliberately draws *nothing*: no rim stroke, no drop shadow, no
+/// gradient, no white "lift" tint. An earlier version added all four, which is what made the
+/// panels read as frosted cards rather than as glass — a hand-drawn hairline and a static
+/// shadow are exactly the vocabulary the real material replaces.
+///
+/// It also never wraps the effect in an opacity or a compositing group, and never puts a fill
+/// behind it. Each of those flattens the layer the material samples, and refraction is the
+/// whole point.
+struct FloatingGlass<S: Shape>: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var colorScheme
 
-    var cornerRadius: CGFloat = 16
-    /// When nil, the panel uses the standard lifted glass. Pass a value to override entirely.
-    var glass: Glass?
+    var shape: S
+    /// Only ever set on the hub. Tint is adaptive tone mapping rather than a colour wash, and
+    /// Apple's warning holds: when everything is tinted, nothing stands out.
+    var tint: Color?
+    var interactive: Bool
 
-    /// A faint white tint mixed into the material.
-    ///
-    /// Glass shows what is behind it, and behind this window is usually a dark editor or
-    /// terminal — so untinted panels go nearly black and the material's character disappears
-    /// exactly when it should be most visible. Lifting the tint keeps the surface reading as
-    /// glass over a dark backdrop without resorting to a coloured wash behind the window.
-    var lift: Double = 0.10
-
-    private var resolvedGlass: Glass {
-        if let glass { return glass }
-        // Dark backdrops need more help than light ones, which already have plenty to lens.
-        let amount = colorScheme == .dark ? lift : lift * 0.4
-        return Glass.regular.tint(.white.opacity(amount))
+    private var glass: Glass {
+        // `identity` is the documented no-op, so the accessible path keeps the same view tree
+        // and the same view identity — which matters here because these shapes morph.
+        guard !reduceTransparency else { return .identity }
+        let base = tint.map { Glass.regular.tint($0) } ?? .regular
+        return interactive ? base.interactive() : base
     }
 
     func body(content: Content) -> some View {
-        if reduceTransparency {
-            content
-                .background(.background, in: .rect(cornerRadius: cornerRadius))
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(.separator, lineWidth: 1))
-        } else {
-            content
-                .glassEffect(resolvedGlass, in: .rect(cornerRadius: cornerRadius))
-                // A single hairline, uniform weight. Not the multi-stop fake specular this
-                // replaced — just enough to define where the pane ends, which the material
-                // alone does not do convincingly against a dark background.
-                .overlay(
-                    RoundedRectangle(cornerRadius: cornerRadius)
-                        .strokeBorder(
-                            .white.opacity(colorScheme == .dark ? 0.16 : 0.30),
-                            lineWidth: 0.5)
-                        .allowsHitTesting(false))
-                .shadow(color: .black.opacity(0.24), radius: 16, y: 6)
-        }
+        content
+            .glassEffect(glass, in: shape)
+            // Only ever non-clear when the glass above is `identity`, so this is a fallback
+            // surface rather than a fill sitting behind live glass.
+            .background(
+                reduceTransparency ? AnyShapeStyle(.background) : AnyShapeStyle(.clear),
+                in: shape)
     }
 }
 
 extension View {
-    func glassPanel(cornerRadius: CGFloat = 16, glass: Glass? = nil, lift: Double = 0.10)
-        -> some View
-    {
-        modifier(GlassPanel(cornerRadius: cornerRadius, glass: glass, lift: lift))
-    }
-
-    /// For controls that should respond to pointer proximity the way system glass does.
-    func interactiveGlass(cornerRadius: CGFloat = 12, tint: Color? = nil) -> some View {
-        modifier(
-            GlassPanel(
-                cornerRadius: cornerRadius,
-                glass: Glass.regular
-                    .tint(tint ?? .white.opacity(0.14))
-                    .interactive()))
+    /// Floats this view above the content layer on Liquid Glass.
+    ///
+    /// Apply last: SwiftUI anchors the glass to the view's bounds, so padding and any modifier
+    /// that changes appearance must already have been applied.
+    ///
+    /// Uses the `regular` variant throughout. `clear` is non-adaptive and would need its own
+    /// dimming layer; every floating element here carries dense figures over a chart whose
+    /// colours vary from pale to saturated, which is precisely the case Apple reserves
+    /// `regular` for. The two variants are never mixed.
+    func floatingGlass(
+        in shape: some Shape = Capsule(),
+        tint: Color? = nil,
+        interactive: Bool = false
+    ) -> some View {
+        modifier(FloatingGlass(shape: shape, tint: tint, interactive: interactive))
     }
 }

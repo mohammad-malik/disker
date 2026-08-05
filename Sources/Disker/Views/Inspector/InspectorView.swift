@@ -22,8 +22,9 @@ struct InspectorView: View {
             }
             .padding(16)
         }
-        .frame(width: 300)
-        .glassPanel()
+        // No width, no material. This is presented through the `.inspector` modifier, which
+        // supplies the column sizing and renders the panel in Liquid Glass itself — a frame
+        // and a glass card here would have been a second material inside the first.
     }
 
     @ViewBuilder
@@ -258,7 +259,9 @@ struct InspectorView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
-                .buttonStyle(.glass)
+                // Bordered rather than glass: these sit inside the inspector's own glass,
+                // and the material is never stacked on itself.
+                .buttonStyle(.bordered)
 
                 Button(role: .destructive) {
                     model.requestDeletion(of: segment)
@@ -267,7 +270,7 @@ struct InspectorView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .disabled(segment.node.kind == .aggregate)
                 .help("Asks for confirmation first. Undo with ⌘Z.")
             }

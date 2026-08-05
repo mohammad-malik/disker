@@ -54,7 +54,7 @@ struct MoleView: View {
                     Label("Configure & Run…", systemImage: "slider.horizontal.3")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glassProminent)
+                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
                 Button {
@@ -65,7 +65,7 @@ struct MoleView: View {
                     Label("Refresh Preview", systemImage: "arrow.clockwise")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
                 .disabled(model.isLoadingMole)
             }
             .frame(width: 190)
@@ -125,8 +125,10 @@ struct MoleView: View {
                         }
                     }
                 }
+                // Content, not chrome — so a standard fill rather than the glass this used
+                // to carry. Glass in the content layer is what flattened the hierarchy.
                 .padding(12)
-                .glassPanel(cornerRadius: 11)
+                .background(.quaternary, in: .rect(cornerRadius: 11))
             }
         }
     }
@@ -142,9 +144,9 @@ struct MoleView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Open Mole Anyway") { model.launchMoleCleanup() }
-                .buttonStyle(.glass)
+                .buttonStyle(.bordered)
         }
         .padding(14)
-        .glassPanel(cornerRadius: 11)
+        .background(.quaternary, in: .rect(cornerRadius: 11))
     }
 }

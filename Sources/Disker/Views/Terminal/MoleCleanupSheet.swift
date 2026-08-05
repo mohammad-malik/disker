@@ -36,9 +36,9 @@ struct MoleCleanupSheet: View {
             footer
         }
         .frame(width: 880, height: 660)
-        // Only the terminal is pinned dark. The configuration form is ordinary app UI and
-        // should follow the chosen appearance like everything else.
-        .background(showingTerminal ? Color(white: 0.06) : Color.clear)
+        // No background on the sheet itself. Tahoe renders sheets in Liquid Glass, and a
+        // fill here painted straight over it. The terminal is its own dark content surface
+        // and keeps its background locally — see `terminal`.
         .modifier(DarkWhenTerminal(active: showingTerminal))
         .onAppear { model.moleShowingTerminal = session.hasOutput }
         .confirmationDialog(
@@ -313,7 +313,10 @@ struct MoleCleanupSheet: View {
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
             }
-            .background(.black.opacity(0.5))
+            // Opaque, and scoped to the terminal alone now that the sheet no longer paints
+            // itself dark. A terminal is legitimately its own content surface; the glass
+            // around it belongs to the sheet.
+            .background(Color(white: 0.06))
 
             // Fills the terminal and is hit-testable, so clicking anywhere in the output
             // focuses it. Previously this was a zero-size view with hit testing disabled,
@@ -341,7 +344,9 @@ struct MoleCleanupSheet: View {
                         model.moleConfiguration.dryRun ? "Preview" : "Run",
                         systemImage: model.moleConfiguration.dryRun ? "eye" : "play.fill")
                 }
-                .buttonStyle(.glassProminent)
+                // Bordered, not glass: the sheet itself is glass and the material is never
+                // stacked on itself.
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
             } else {
                 if case .finished = session.state, session.configuration?.dryRun == true {
@@ -352,14 +357,14 @@ struct MoleCleanupSheet: View {
                     } label: {
                         Label("Run This For Real", systemImage: "play.fill")
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
                 }
                 if case .finished = session.state, session.configuration?.dryRun == false {
                     Button("Re-scan Disk") {
                         dismiss()
                         Task { await model.scan() }
                     }
-                    .buttonStyle(.glassProminent)
+                    .buttonStyle(.borderedProminent)
                 }
             }
 
