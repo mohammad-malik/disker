@@ -35,6 +35,7 @@ struct SplitShell: NSViewControllerRepresentable {
     /// for, which `NavigationSplitView` would not give up.
     func makeNSViewController(context: Context) -> NSSplitViewController {
         let split = NSSplitViewController()
+        ShellRegistry.split = split
 
         let sidebarHost = NSHostingController(rootView: SidebarView(model: model))
         let sidebarItem = NSSplitViewItem(
@@ -93,13 +94,30 @@ struct SplitShell: NSViewControllerRepresentable {
     }
 }
 
+/// Holds the live split controller so the sidebar can be toggled from anywhere.
+///
+/// Neither of the obvious routes works. `NSApp.sendAction(#selector(toggleSidebar(_:)))` and
+/// `firstResponder.tryToPerform(...)` both walk the responder chain, and the first responder
+/// here lives inside the sidebar's own list — so collapsing the sidebar removes it from the
+/// chain and every later send has nothing to deliver to. That is the bug where the sidebar
+/// closed once and could never be reopened. Walking down from
+/// `window.contentViewController` does not work either: SwiftUI does not necessarily install
+/// a representable's controller as a child in that tree.
+///
+/// A weak reference set at construction sidesteps all of it.
+@MainActor
+enum ShellRegistry {
+    static weak var split: NSSplitViewController?
+}
+
 extension NSSplitViewController {
-    /// Sent up the responder chain by the toolbar's sidebar button.
-    ///
-    /// `NavigationSplitView` supplied this control for free; an AppKit split view does not,
-    /// so the toolbar posts the standard action and the controller's own implementation
-    /// handles it.
+    /// Collapses or expands the sidebar. `NavigationSplitView` supplied this control for
+    /// free; an AppKit split view does not.
     static func toggleSidebarFromToolbar() {
-        NSApp.sendAction(#selector(NSSplitViewController.toggleSidebar(_:)), to: nil, from: nil)
+        guard let sidebar = ShellRegistry.split?.splitViewItems.first else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.allowsImplicitAnimation = true
+            sidebar.animator().isCollapsed.toggle()
+        }
     }
 }

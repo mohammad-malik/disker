@@ -109,7 +109,9 @@ struct ContentView: View {
             } label: {
                 Label("Toggle Sidebar", systemImage: "sidebar.leading")
             }
-            .help("Show or hide the sidebar")
+            // The shortcut lives on the View menu item, not here — declaring it twice makes
+            // neither reliable.
+            .help("Show or hide the sidebar (⌃⌘S)")
             .accessibilityLabel("Show or hide the sidebar")
         }
 

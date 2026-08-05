@@ -117,9 +117,11 @@ struct DiskerCommands: Commands {
             }
             .keyboardShortcut("i", modifiers: [.command, .control])
 
+            // Routed through the shell's own helper rather than the responder chain. The
+            // first responder lives inside the sidebar's list, so once the sidebar collapsed
+            // there was nothing left to perform this and it could never be reopened.
             Button("Toggle Sidebar") {
-                NSApp.keyWindow?.firstResponder?.tryToPerform(
-                    #selector(NSSplitViewController.toggleSidebar(_:)), with: nil)
+                NSSplitViewController.toggleSidebarFromToolbar()
             }
             .keyboardShortcut("s", modifiers: [.command, .control])
         }
