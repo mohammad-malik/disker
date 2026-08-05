@@ -51,7 +51,12 @@ struct SunburstView: View {
                                     model.drillDown(into: hit)
                                 }
                             } else {
-                                model.selectedSegment = hit
+                                withAnimation(
+                                    reduceMotion
+                                        ? nil : .spring(response: 0.3, dampingFraction: 0.9)
+                                ) {
+                                    model.selectFromClick(hit)
+                                }
                             }
                         },
                         onRightClick: { location in
@@ -61,7 +66,12 @@ struct SunburstView: View {
                                 at: location, center: center,
                                 innerRadius: innerRadius, ringWidth: ringWidth)
                             {
-                                model.selectedSegment = hit
+                                withAnimation(
+                                    reduceMotion
+                                        ? nil : .spring(response: 0.3, dampingFraction: 0.9)
+                                ) {
+                                    model.selectFromClick(hit)
+                                }
                             }
                         },
                         onMove: { location in

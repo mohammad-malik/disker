@@ -82,6 +82,19 @@ final class AppModel {
     var hoveredSegment: SunburstSegment?
     var selectedSegment: SunburstSegment?
 
+    /// Selects a wedge in response to a click, revealing the inspector if it is hidden.
+    ///
+    /// Selecting something is a request to see what it is, and the inspector is the only
+    /// place that answer appears — leaving it collapsed makes the click look like it did
+    /// nothing. Deliberately a method rather than a `didSet` on `selectedSegment`: that
+    /// property is also cleared programmatically on rescan and on drilling, and none of
+    /// those should reopen a panel the user closed.
+    func selectFromClick(_ segment: SunburstSegment?) {
+        selectedSegment = segment
+        guard segment != nil, !showsInspector else { return }
+        showsInspector = true
+    }
+
     var recommendations: [Recommendation] = [] {
         didSet { recommendationGroups = RecommendationGroup.group(recommendations) }
     }
