@@ -63,33 +63,93 @@ struct SplitShell: NSViewControllerRepresentable {
 
     func updateNSViewController(_ controller: NSSplitViewController, context: Context) {}
 
-    /// Wraps a hosted view in behind-window vibrancy.
-    ///
-    /// `.behindWindow` samples the desktop rather than the app's own pixels, and the window
-    /// server handles it per-region — which is why an ordinary opaque AppKit window can
-    /// still have a translucent sidebar. That is the whole reason this does not need
-    /// `isOpaque = false`, which punches a hole through the titlebar and takes the window
-    /// title with it.
+    /// Wraps a hosted view in behind-window vibrancy that honours Reduce Transparency.
     private func vibrant(
         _ child: NSViewController, material: NSVisualEffectView.Material
     ) -> NSViewController {
         let container = NSViewController()
-        let effect = NSVisualEffectView()
+        container.view = SidebarBackdrop(content: child.view, material: material)
+        container.addChild(child)
+        return container
+    }
+}
+
+/// The sidebar's backdrop: behind-window vibrancy, or an opaque fill under Reduce
+/// Transparency.
+///
+/// `.behindWindow` samples the desktop rather than the app's own pixels, and the window
+/// server handles it per region — which is why an ordinary opaque AppKit window can still
+/// have a translucent sidebar, and why this does not need `isOpaque = false` (that punches
+/// through the titlebar and takes the window title with it).
+///
+/// The accessibility check has to come from `NSWorkspace`. Every other surface in the app
+/// reads `\.accessibilityReduceTransparency` from the SwiftUI environment, but this view is
+/// installed through `NSViewControllerRepresentable` and sits outside that environment
+/// entirely — so the first version of it stayed translucent no matter the setting, which is
+/// the regression this fixes. The preference can also be toggled while the app is running,
+/// hence the observer.
+final class SidebarBackdrop: NSView {
+    private let effect = NSVisualEffectView()
+
+    init(content: NSView, material: NSVisualEffectView.Material) {
+        super.init(frame: .zero)
+        wantsLayer = true
+
         effect.material = material
         effect.blendingMode = .behindWindow
         effect.state = .followsWindowActiveState
-        container.view = effect
+        effect.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(effect)
 
-        container.addChild(child)
-        child.view.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(child.view)
+        content.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(content)
+
         NSLayoutConstraint.activate([
-            child.view.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            child.view.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-            child.view.topAnchor.constraint(equalTo: effect.topAnchor),
-            child.view.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+            effect.leadingAnchor.constraint(equalTo: leadingAnchor),
+            effect.trailingAnchor.constraint(equalTo: trailingAnchor),
+            effect.topAnchor.constraint(equalTo: topAnchor),
+            effect.bottomAnchor.constraint(equalTo: bottomAnchor),
+            content.leadingAnchor.constraint(equalTo: leadingAnchor),
+            content.trailingAnchor.constraint(equalTo: trailingAnchor),
+            content.topAnchor.constraint(equalTo: topAnchor),
+            content.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
-        return container
+
+        // Selector-based observers on an `NSObject` are removed automatically when the
+        // observer deallocates, so this needs no `deinit` — which is just as well, since
+        // touching main-actor state from one is not allowed.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(accessibilityOptionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil)
+
+        applyTransparencyPreference()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("SidebarBackdrop is not loaded from a nib") }
+
+    /// The notification carries no thread guarantee, so hop to the main actor rather than
+    /// touching the view tree wherever it happens to land.
+    @objc private nonisolated func accessibilityOptionsChanged() {
+        Task { @MainActor [weak self] in self?.applyTransparencyPreference() }
+    }
+
+    /// Re-resolves the opaque fill, which is appearance-dependent and would otherwise keep
+    /// a stale light or dark value after a theme switch.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyTransparencyPreference()
+    }
+
+    private func applyTransparencyPreference() {
+        let reduced = NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency
+        effect.isHidden = reduced
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor =
+                reduced ? NSColor.windowBackgroundColor.cgColor : NSColor.clear.cgColor
+        }
     }
 }
 
