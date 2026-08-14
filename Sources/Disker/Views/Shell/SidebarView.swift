@@ -94,6 +94,9 @@ struct SidebarView: View {
                     .font(.caption)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
+                    // A truncated size is a wrong number, so this never shrinks. If the
+                    // sidebar is dragged narrow enough, the title gives way instead.
+                    .fixedSize()
             }
         }
     }
