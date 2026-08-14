@@ -13,8 +13,13 @@ struct RecommendationBar: View {
             Spacer(minLength: 0)
             cleanButton
         }
-        .padding(14)
-        .glassPanel()
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        // Floating chrome over the chart, so this is glass — and the chart running beneath
+        // it is what the material lenses. Nothing is drawn on top of it: the shadow and the
+        // specular edge come from the material, and a hand-drawn rim is what made the old
+        // version read as a card.
+        .floatingGlass(in: .rect(cornerRadius: 26))
     }
 
     @ViewBuilder
@@ -72,7 +77,10 @@ struct RecommendationBar: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 9)
-            .interactiveGlass(cornerRadius: 11)
+            // A fill, not a second glass layer. These ride on top of the bar's material,
+            // and Apple's fix for elements over glass is fills and vibrancy rather than
+            // more glass.
+            .background(.quaternary, in: .rect(cornerRadius: 11))
             .help(category.items.prefix(6).map(\.name).joined(separator: "\n"))
         }
     }
@@ -84,10 +92,14 @@ struct RecommendationBar: View {
             Label("Clean with Mole", systemImage: "wand.and.sparkles")
                 .padding(.horizontal, 6)
         }
+        // The primary action never truncates. Without this the category cards won on the
+        // width split and the button read "Clean wi…".
+        .fixedSize(horizontal: true, vertical: false)
         .controlSize(.large)
-        // The system's own glass button, rather than a tinted rectangle. It picks up the
-        // same lensing as the panels, so the primary action belongs to the surface it sits on.
-        .buttonStyle(.glassProminent)
+        // Not `.glassProminent`: this button sits on the bar's glass, and stacking the
+        // material on itself is the one thing Apple rules out. A prominent bordered button
+        // is also what the new design calls for as the primary action on macOS.
+        .buttonStyle(.borderedProminent)
         // Not gated on the background dry-run report. The sheet runs its own preview, so
         // waiting on a summary that takes up to a minute only made the button look broken.
         .help("Runs Mole inside Disker, starting with a preview of what it would remove.")

@@ -53,8 +53,11 @@ struct RecommendationsPanel: View {
             }
         }
         .listStyle(.inset)
-        .scrollContentBackground(.hidden)
         .alternatingRowBackgrounds(.disabled)
+        // `hard` rather than `soft`: this is a dense list of figures under a floating glass
+        // toolbar, and the crisper boundary is the macOS-leaning choice for text and controls
+        // that scroll beneath one.
+        .scrollEdgeEffectStyle(.hard, for: .top)
     }
 }
 

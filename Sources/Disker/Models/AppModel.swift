@@ -54,7 +54,24 @@ final class AppModel {
     var section: Section = .overview
     /// The inspector is collapsible; the chart is the point of the window and deserves the
     /// space on a laptop display.
+    ///
+    /// This is the user's *preference*, not whether the panel is on screen — sections with
+    /// nothing to inspect suppress it without disturbing the preference. Read
+    /// `sectionSupportsInspector` alongside it rather than clearing this.
     var showsInspector = true
+
+    /// Whether the current section has anything for the inspector to describe.
+    ///
+    /// Lives here because the detail view, the toolbar, and the View menu all need the same
+    /// answer. It was duplicated across two of them, and the third never got the check at
+    /// all — which is how the menu ended up offering "Hide Details" in sections that have
+    /// no details to hide.
+    var sectionSupportsInspector: Bool {
+        switch section {
+        case .overview, .location: return true
+        case .recommendations, .mole: return false
+        }
+    }
 
     let moleSession = MoleSession()
     var moleConfiguration = MoleConfiguration()
@@ -81,6 +98,19 @@ final class AppModel {
 
     var hoveredSegment: SunburstSegment?
     var selectedSegment: SunburstSegment?
+
+    /// Selects a wedge in response to a click, revealing the inspector if it is hidden.
+    ///
+    /// Selecting something is a request to see what it is, and the inspector is the only
+    /// place that answer appears — leaving it collapsed makes the click look like it did
+    /// nothing. Deliberately a method rather than a `didSet` on `selectedSegment`: that
+    /// property is also cleared programmatically on rescan and on drilling, and none of
+    /// those should reopen a panel the user closed.
+    func selectFromClick(_ segment: SunburstSegment?) {
+        selectedSegment = segment
+        guard segment != nil, !showsInspector else { return }
+        showsInspector = true
+    }
 
     var recommendations: [Recommendation] = [] {
         didSet { recommendationGroups = RecommendationGroup.group(recommendations) }

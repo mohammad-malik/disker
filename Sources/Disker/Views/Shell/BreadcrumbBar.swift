@@ -1,58 +1,39 @@
 import DiskerCore
 import SwiftUI
 
-/// The path above the chart, as a row of chips on a recessed track.
+/// The path above the chart, as a row of glass capsules floating over it.
 ///
-/// It was previously bare text buttons with 4pt of spacing and no padding, which measured
-/// 24×14pt for a crumb named "Data" — under half Apple's 28pt minimum in either direction,
-/// on a control whose whole job is to be clicked to go back. The chips exist for that reason
-/// first; the track and the glass are what make a row of padded rectangles look deliberate.
+/// Each crumb is its own Liquid Glass shape sharing the chart's `GlassEffectContainer` and
+/// carrying a `glassEffectID` keyed on the folder's path. That is what makes drilling in and
+/// out *look* like this material rather than merely use it: a new capsule is derived from the
+/// geometry of the one beside it, so the row grows and shrinks by morphing instead of fading.
 ///
-/// The track is a plain recessed fill rather than another glass layer. This view sits inside
-/// the chart panel, which is already glass, and stacking material on material reads as muddy
-/// grey rather than as depth — the same trap `GlassPanel` documents. One recessed track with
-/// a single glass chip riding in it is the segmented-control idiom, and it gives the active
-/// chip something to lens against.
+/// The stack spacing deliberately matches the container's. Apple's rule is that a container
+/// spaced wider than its interior stack makes the shapes blend at rest; matched, they stay
+/// distinct while standing still and only merge while animating — which is exactly the
+/// behaviour a path wants.
+///
+/// There is no track behind them any more. The old recessed fill existed because this row sat
+/// inside a glass card and a second glass layer would have been glass on glass; now it floats
+/// over the chart itself, so the chart is what it lenses.
 struct BreadcrumbBar: View {
     @Bindable var model: AppModel
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @State private var hoveredIndex: Int?
+    let namespace: Namespace.ID
 
     var body: some View {
-        HStack(spacing: 1) {
+        HStack(spacing: 12) {
             ForEach(Array(model.breadcrumb.enumerated()), id: \.offset) { index, node in
-                if index > 0 { separator }
                 crumb(node: node, index: index)
             }
-            Spacer(minLength: 6)
+            Spacer(minLength: 0)
         }
-        .padding(3)
-        .background(track)
-        .animation(.easeOut(duration: 0.12), value: hoveredIndex)
-        .animation(.easeOut(duration: 0.2), value: model.breadcrumb.count)
-    }
-
-    private var separator: some View {
-        Image(systemName: "chevron.compact.right")
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.tertiary)
-            .accessibilityHidden(true)
-    }
-
-    @ViewBuilder
-    private var track: some View {
-        let shape = RoundedRectangle(cornerRadius: 13, style: .continuous)
-        if reduceTransparency {
-            shape.strokeBorder(.separator, lineWidth: 1)
-        } else {
-            shape.fill(.quaternary.opacity(0.5))
-        }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: model.breadcrumb.count)
     }
 
     @ViewBuilder
     private func crumb(node: FileNode, index: Int) -> some View {
         let isCurrent = index == model.breadcrumb.count - 1
-        let isHovered = hoveredIndex == index
+        let path = model.absolutePath(forDepth: index)
 
         Button {
             model.drillUp(to: index)
@@ -70,16 +51,19 @@ struct BreadcrumbBar: View {
                     // Ancestors truncate before the folder you are actually looking at does.
                     .layoutPriority(isCurrent ? 2 : 1)
             }
+            // Emphasis comes from type and vibrancy, not from a second material or a tint.
             .foregroundStyle(isCurrent ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 11)
+            .padding(.horizontal, 12)
             .padding(.vertical, 7)
             // Applied to the label, so the whole chip is clickable rather than just the
             // glyphs inside it.
-            .contentShape(.rect(cornerRadius: 10, style: .continuous))
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
-        .background { chipBackground(isCurrent: isCurrent, isHovered: isHovered) }
-        .onHover { hoveredIndex = $0 ? index : (hoveredIndex == index ? nil : hoveredIndex) }
+        .floatingGlass(in: Capsule(), interactive: true)
+        .glassEffectID(path, in: namespace)
+        // No hover tracking: `interactive` glass illuminates from within on its own, and
+        // spreads that response to the neighbouring shapes in the same container.
         // The breadcrumb names where you are, so it is where people reach for the path.
         // Offered on every crumb, not just the last, so an ancestor's path is reachable
         // without navigating to it first.
@@ -87,20 +71,8 @@ struct BreadcrumbBar: View {
             Button("Copy Path") { model.copyPath(depth: index) }
             Button("Reveal in Finder") { model.revealInFinder(depth: index) }
         }
-        .help(model.absolutePath(forDepth: index))
+        .help(path)
         .accessibilityLabel(
             isCurrent ? "\(node.name), current folder" : "Go to \(node.name)")
-    }
-
-    @ViewBuilder
-    private func chipBackground(isCurrent: Bool, isHovered: Bool) -> some View {
-        if isCurrent {
-            // Interactive glass, so the active chip picks up pointer proximity the way the
-            // rest of the window's controls do.
-            Color.clear.interactiveGlass(cornerRadius: 10, tint: .white.opacity(0.16))
-        } else if isHovered {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(.quaternary)
-        }
     }
 }

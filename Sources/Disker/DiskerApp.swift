@@ -1,3 +1,4 @@
+import AppKit
 import DiskerCore
 import SwiftUI
 
@@ -13,7 +14,9 @@ struct DiskerApp: App {
                 .task { appearance.start() }
         }
         .defaultSize(width: 1360, height: 880)
-        .windowStyle(.hiddenTitleBar)
+        // No `.hiddenTitleBar`: a standard window is what gets the floating glass toolbar,
+        // the inset glass sidebar, and Tahoe's larger concentric corners. Hiding the titlebar
+        // suppressed all three, which is why none of the real material was visible.
         .windowToolbarStyle(.unified)
         .commands { DiskerCommands(model: model, appearance: appearance) }
 
@@ -24,51 +27,11 @@ struct DiskerApp: App {
 struct ContentView: View {
     @Bindable var model: AppModel
     @Bindable var appearance: AppearanceController
-    @State private var columnVisibility = NavigationSplitViewVisibility.all
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            SidebarView(model: model)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
-                // The sidebar's own material would otherwise paint over the transparent
-                // window and reintroduce the flat background glass needs to avoid.
-                .toolbarBackground(.hidden, for: .windowToolbar)
-        } detail: {
-            detail
-        }
-        // Clear window + frosted backdrop, in that order. The clear window removes the
-        // opaque slab that made glass render flat; the backdrop then gives it something
-        // to refract, so panels read as material rather than as holes.
-        .transparentWindowBackground(enabled: !reduceTransparency)
-        // Must be `containerBackground`, not `.background`. NavigationSplitView draws its
-        // own opaque sidebar and detail panes, which sit above any ordinary background
-        // modifier and hid the backdrop entirely — the window stayed flat grey.
-        // containerBackground installs beneath that chrome.
-        // Must be `containerBackground`, not `.background`. NavigationSplitView draws its
-        // own opaque panes above any ordinary background modifier, which hid this entirely.
-        //
-        // Neutral, uncoloured frost. An earlier version painted coloured light pools here to
-        // guarantee the glass had something vivid to refract; it read as a rainbow gradient,
-        // which is the opposite of what this material is. Glass should show what is actually
-        // behind the window, even when that is something plain.
-        //
-        // Two extremes were wrong. `.underWindowBackground` frosted the whole window before
-        // the panels could sample it, so they refracted a grey slab rather than the screen.
-        // Fully clear went the other way: real refraction, but the desktop read straight
-        // through the panels and the terminal behind became legible under the numbers.
-        //
-        // `.sidebar` is the middle — translucent enough that the glass has genuine depth to
-        // lens, opaque enough that dense figures stay readable over whatever is behind.
-        // `isEmphasized` keeps it at full strength even when the window is not key, so the
-        // material does not visibly deaden every time focus moves elsewhere.
-        .containerBackground(for: .window) {
-            if reduceTransparency {
-                Color(nsColor: .windowBackgroundColor)
-            } else {
-                VisualEffectBackdrop(material: .sidebar, isEmphasized: true)
-            }
-        }
+        // AppKit, not `NavigationSplitView` — see `SplitShell` for the four SwiftUI
+        // routes to behind-window translucency that all ended up under an opaque pane.
+        SplitShell(model: model)
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
@@ -126,108 +89,21 @@ struct ContentView: View {
         }
     }
 
-    @ViewBuilder
-    private var detail: some View {
-        // GlassEffectContainer is what makes these panels behave as one material rather than
-        // three independent blurs: it shares a single sampling pass, so nearby glass shapes
-        // blend and their edges respond to each other instead of stacking into muddy grey.
-        // Omitting it was why the panels read as flat cards.
-        GlassEffectContainer(spacing: 14) {
-            VStack(spacing: 14) {
-                if let error = model.lastError {
-                    errorBanner(error)
-                }
-
-                switch model.section {
-                case .overview, .location:
-                    // The chart is the main view; everything else is a peer section rather
-                    // than something layered on top of it.
-                    HStack(alignment: .top, spacing: 14) {
-                        chartPanel
-                        if model.showsInspector {
-                            InspectorView(model: model)
-                                .transition(.move(edge: .trailing).combined(with: .opacity))
-                        }
-                    }
-                case .recommendations:
-                    RecommendationsPanel(model: model)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .glassPanel()
-                case .mole:
-                    MoleView(model: model)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .glassPanel()
-                }
-
-                // Only on the chart: the other sections already show this information in
-                // full, and repeating it below them is noise.
-                if case .overview = model.section {
-                    RecommendationBar(model: model)
-                }
-            }
-        }
-        .padding(14)
-        .sheet(isPresented: $model.showingAccessSheet) {
-            FullDiskAccessSheet(model: model)
-        }
-    }
-
-    private func errorBanner(_ message: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
-            Text(message)
-                .font(.callout)
-                .lineLimit(2)
-            Spacer()
-            Button("Dismiss") { model.lastError = nil }
-                .buttonStyle(.borderless)
-        }
-        .padding(12)
-        .glassPanel(cornerRadius: 11)
-    }
-
-    @ViewBuilder
-    private var chartPanel: some View {
-        VStack(spacing: 10) {
-            BreadcrumbBar(model: model)
-            switch model.scanState {
-            case .scanning(let progress):
-                scanningState(progress)
-            case .failed(let message):
-                ContentUnavailableView(
-                    "Scan failed", systemImage: "exclamationmark.triangle", description: Text(message))
-            case .loaded, .idle:
-                SunburstView(model: model)
-                CategoryLegend(root: model.currentRoot, rootComponents: model.rootComponents)
-                    .padding(.bottom, 6)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(16)
-        .glassPanel()
-    }
-
-    private func scanningState(_ progress: ScanProgress?) -> some View {
-        VStack(spacing: 12) {
-            ProgressView()
-                .controlSize(.large)
-            Text(progress.map { "\($0.filesScanned.formatted()) files" } ?? "Starting…")
-                .font(.headline)
-            if let progress {
-                Text(progress.currentPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(maxWidth: 420)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            // `NavigationSplitView` supplied this for free; an AppKit split view does not.
+            Button {
+                NSSplitViewController.toggleSidebarFromToolbar()
+            } label: {
+                Label("Toggle Sidebar", systemImage: "sidebar.leading")
+            }
+            // The shortcut lives on the View menu item, not here — declaring it twice makes
+            // neither reliable.
+            .help("Show or hide the sidebar (⌃⌘S)")
+            .accessibilityLabel("Show or hide the sidebar")
+        }
+
         ToolbarItem(placement: .navigation) {
             // The disk picker from the design mock. Always present, even with one disk:
             // it names what you are looking at, which the window title alone stops doing
@@ -269,12 +145,15 @@ struct ContentView: View {
             .disabled(isScanning)
         }
 
-        ToolbarItem(placement: .primaryAction) {
-            if case .recommendations = model.section {
-                EmptyView()
-            } else if case .mole = model.section {
-                EmptyView()
-            } else {
+        // Separates the inspector toggle into its own glass capsule. It acts on the window's
+        // chrome rather than on the data, so grouping it with Re-scan would read as one
+        // control. Dropping the whole item — rather than filling it with an EmptyView —
+        // is what keeps an empty capsule from being left behind in the sections that have
+        // no inspector.
+        if model.sectionSupportsInspector {
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+
+            ToolbarItem(placement: .primaryAction) {
                 Button {
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.9)) {
                         model.showsInspector.toggle()

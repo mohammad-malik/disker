@@ -3,6 +3,9 @@ import SwiftUI
 
 struct SunburstView: View {
     @Bindable var model: AppModel
+    /// Shared with the breadcrumb, so the hub and the path render in one sampling pass and
+    /// respond to each other's interaction.
+    let namespace: Namespace.ID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let hubFraction: CGFloat = 0.30
@@ -48,7 +51,12 @@ struct SunburstView: View {
                                     model.drillDown(into: hit)
                                 }
                             } else {
-                                model.selectedSegment = hit
+                                withAnimation(
+                                    reduceMotion
+                                        ? nil : .spring(response: 0.3, dampingFraction: 0.9)
+                                ) {
+                                    model.selectFromClick(hit)
+                                }
                             }
                         },
                         onRightClick: { location in
@@ -58,7 +66,12 @@ struct SunburstView: View {
                                 at: location, center: center,
                                 innerRadius: innerRadius, ringWidth: ringWidth)
                             {
-                                model.selectedSegment = hit
+                                withAnimation(
+                                    reduceMotion
+                                        ? nil : .spring(response: 0.3, dampingFraction: 0.9)
+                                ) {
+                                    model.selectFromClick(hit)
+                                }
                             }
                         },
                         onMove: { location in
@@ -72,7 +85,11 @@ struct SunburstView: View {
                         })
                 }
 
-                hub(radius: innerRadius)
+                // Deliberately wider than the hole it sits in, so the first ring passes
+                // beneath its edge. Sized to `innerRadius` exactly, the hub covered the one
+                // part of the chart with nothing in it — glass with nothing behind it is
+                // just a dark disc, which is precisely what it looked like.
+                hub(radius: innerRadius * 1.22)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contextMenu {
@@ -219,13 +236,17 @@ struct SunburstView: View {
         }
         .padding(radius * 0.18)
         .frame(width: radius * 2, height: radius * 2)
-        // Tinted toward the hovered category so the hub reads as a lens over the chart
-        // rather than a hole punched through it, and picks up the colour of whatever the
-        // pointer is on. Untinted glass here goes black against the dark panel.
-        .glassPanel(
-            cornerRadius: radius,
-            glass: Glass.regular.tint(hubTint.opacity(0.30)).interactive())
-        .contentShape(.circle)
+        // The one tinted surface in the app. Tint is adaptive tone mapping rather than a
+        // colour wash — it remaps a range of tones against the brightness underneath — so a
+        // light touch is enough to tie the readout to the wedge the pointer is on. Heavier
+        // than this and it stops reading as glass and starts reading as coloured plastic,
+        // and Apple's warning applies: when everything is tinted, nothing stands out.
+        .floatingGlass(in: Circle(), tint: hubTint.opacity(0.18), interactive: true)
+        .glassEffectID("hub", in: namespace)
+        // Hit testing stays at the hole's real radius. The extra 22% exists to give the
+        // material something to lens, and it should not also swallow clicks on the first
+        // ring that now passes underneath it.
+        .contentShape(Circle().scale(1 / 1.22))
         .onTapGesture {
             // Clicking the hub steps back out, mirroring the drill-in gesture.
             if model.drillPath.count > 1 {
