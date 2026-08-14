@@ -25,12 +25,31 @@ struct SidebarView: View {
 
             Section("Locations") {
                 ForEach(topLevelLocations, id: \.name) { location in
-                    row(
-                        title: location.name,
-                        symbol: location.symbol,
-                        trailing: location.size.formattedBytes
-                    )
-                    .tag(AppModel.Section.location(location.name))
+                    let section = AppModel.Section.location(location.name)
+                    // A button, not a bare selectable row.
+                    //
+                    // Drilling into the chart moves the view without changing `section`, so
+                    // a few levels deep this row is still the selected one — and clicking it
+                    // is the obvious way back to the top of that folder. `List`'s selection
+                    // binding only fires when the value *changes*, so that click never
+                    // reached the model and the row was simply dead. A `simultaneousGesture`
+                    // does not help either; the list consumes the click first. Handling it
+                    // as a button means every click navigates, whether or not the selection
+                    // moved. The binding still supplies the highlight through its getter.
+                    Button {
+                        model.section = section
+                        model.openLocation(named: location.name)
+                    } label: {
+                        row(
+                            title: location.name,
+                            symbol: location.symbol,
+                            trailing: location.size.formattedBytes
+                        )
+                        // Without this only the glyphs are clickable, not the whole row.
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .tag(section)
                 }
             }
         }
