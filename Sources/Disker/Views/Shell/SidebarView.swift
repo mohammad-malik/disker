@@ -57,6 +57,16 @@ struct SidebarView: View {
         // it. This is the one background removal that matters — with the list drawing its
         // own, the desktop stops at the hosting view and the sidebar goes flat.
         .scrollContentBackground(.hidden)
+        // The sidebar is an inset panel with rounded corners, and the first row was landing
+        // about 2pt from its top edge against 10pt at the sides — close enough that the
+        // selection highlight ran into the corner radius and read as spilling outside the
+        // panel. This gives the top the same breathing room the sides already had.
+        //
+        // Padding rather than `contentMargins(.top:for: .scrollContent)`, which had no
+        // effect here, or a `safeAreaInset`, which would only move the resting position and
+        // let rows scroll into the corner anyway. Insetting the list itself keeps them out
+        // of that band entirely, and the vibrancy behind still fills it.
+        .padding(.top, 8)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 Divider()
