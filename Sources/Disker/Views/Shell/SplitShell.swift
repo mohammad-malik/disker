@@ -39,7 +39,10 @@ struct SplitShell: NSViewControllerRepresentable {
         let sidebarHost = NSHostingController(rootView: SidebarView(model: model))
         let sidebarItem = NSSplitViewItem(
             sidebarWithViewController: vibrant(sidebarHost, material: .sidebar))
-        sidebarItem.minimumThickness = 200
+        // The split view parks the sidebar at its minimum, so the minimum is effectively the
+        // default width. 200 was too narrow for the longest row — "Recommendations" plus its
+        // size badge — which left it reading "Recommen…" out of the box.
+        sidebarItem.minimumThickness = 260
         sidebarItem.maximumThickness = 320
         sidebarItem.canCollapse = true
         // A full-height sidebar splits the titlebar into two regions, so leading toolbar

@@ -14,42 +14,47 @@ struct SidebarView: View {
     /// this go back to a real `List` — and a real `List` is what picks up Tahoe's inset
     /// floating glass sidebar and its selection material. Nothing here paints a background:
     /// a custom fill in a sidebar blocks that glass outright.
+    /// Radius of the selection highlight, chosen to match the corner of the sidebar panel
+    /// it sits inside. The system's own sidebar selection is noticeably rounder than that
+    /// panel, which is why the highlight is drawn here rather than left to `List`.
+    private static let selectionRadius: CGFloat = 10
+
     var body: some View {
-        List(selection: selection) {
+        // Rows are buttons and the highlight is drawn here, rather than using
+        // `List(selection:)`.
+        //
+        // Two reasons, and the first is behavioural. Drilling into the chart moves the view
+        // without changing `section`, so a few levels deep the current location is still the
+        // selected row — and clicking it is the obvious way back to the top of that folder.
+        // A selection binding only fires when the value *changes*, so that click never
+        // reached the model and the row was simply dead. A `simultaneousGesture` does not
+        // help either; the list consumes the click first.
+        //
+        // The second is that the system's selection shape is much rounder than the panel it
+        // sits in, and its radius is not adjustable. This is how the sidebar worked before
+        // it moved to `List`, so keyboard selection is no worse than it was.
+        List {
             Section {
                 ForEach(AppModel.Section.fixed) { item in
-                    row(title: item.title, symbol: item.symbolName, trailing: badge(for: item))
-                        .tag(item)
+                    sidebarRow(
+                        section: item, title: item.title, symbol: item.symbolName,
+                        trailing: badge(for: item)
+                    ) {
+                        model.section = item
+                    }
                 }
             }
 
             Section("Locations") {
                 ForEach(topLevelLocations, id: \.name) { location in
                     let section = AppModel.Section.location(location.name)
-                    // A button, not a bare selectable row.
-                    //
-                    // Drilling into the chart moves the view without changing `section`, so
-                    // a few levels deep this row is still the selected one — and clicking it
-                    // is the obvious way back to the top of that folder. `List`'s selection
-                    // binding only fires when the value *changes*, so that click never
-                    // reached the model and the row was simply dead. A `simultaneousGesture`
-                    // does not help either; the list consumes the click first. Handling it
-                    // as a button means every click navigates, whether or not the selection
-                    // moved. The binding still supplies the highlight through its getter.
-                    Button {
+                    sidebarRow(
+                        section: section, title: location.name, symbol: location.symbol,
+                        trailing: location.size.formattedBytes
+                    ) {
                         model.section = section
                         model.openLocation(named: location.name)
-                    } label: {
-                        row(
-                            title: location.name,
-                            symbol: location.symbol,
-                            trailing: location.size.formattedBytes
-                        )
-                        // Without this only the glyphs are clickable, not the whole row.
-                        .contentShape(.rect)
                     }
-                    .buttonStyle(.plain)
-                    .tag(section)
                 }
             }
         }
@@ -57,6 +62,16 @@ struct SidebarView: View {
         // it. This is the one background removal that matters — with the list drawing its
         // own, the desktop stops at the hosting view and the sidebar goes flat.
         .scrollContentBackground(.hidden)
+        // The sidebar is an inset panel with rounded corners, and the first row was landing
+        // about 2pt from its top edge against 10pt at the sides — close enough that the
+        // selection highlight ran into the corner radius and read as spilling outside the
+        // panel. This gives the top the same breathing room the sides already had.
+        //
+        // Padding rather than `contentMargins(.top:for: .scrollContent)`, which had no
+        // effect here, or a `safeAreaInset`, which would only move the resting position and
+        // let rows scroll into the corner anyway. Insetting the list itself keeps them out
+        // of that band entirely, and the vibrancy behind still fills it.
+        .padding(.top, 8)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 Divider()
@@ -66,36 +81,50 @@ struct SidebarView: View {
         }
     }
 
-    /// Selection with the navigation side effect the section change alone does not perform.
-    private var selection: Binding<AppModel.Section?> {
-        Binding(
-            get: { model.section },
-            set: { newValue in
-                // The equality check is defensive: `List` can hand back the current
-                // selection during reconciliation, and re-running `openLocation` would
-                // throw away the drill-down the user had navigated to.
-                guard let newValue, newValue != model.section else { return }
-                model.section = newValue
-                if case .location(let name) = newValue {
-                    model.openLocation(named: name)
+    /// One source-list row: icon, title, optional size, and the selection highlight.
+    private func sidebarRow(
+        section: AppModel.Section,
+        title: String,
+        symbol: String,
+        trailing: String?,
+        action: @escaping () -> Void
+    ) -> some View {
+        let isSelected = model.section == section
+        return Button(action: action) {
+            HStack(spacing: 6) {
+                Label(title, systemImage: symbol)
+                    .lineLimit(1)
+                Spacer(minLength: 6)
+                if let trailing {
+                    Text(trailing)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(
+                            isSelected
+                                ? AnyShapeStyle(.white.opacity(0.85)) : AnyShapeStyle(.secondary))
+                        // A truncated size is a wrong number, so this never shrinks. If the
+                        // sidebar is dragged narrow enough, the title gives way instead.
+                        .fixedSize()
                 }
-            })
-    }
-
-    /// One source-list row. Selection styling is the system's — a sidebar row that paints its
-    /// own highlight cannot pick up the material behind it.
-    private func row(title: String, symbol: String, trailing: String?) -> some View {
-        HStack(spacing: 6) {
-            Label(title, systemImage: symbol)
-                .lineLimit(1)
-            Spacer(minLength: 6)
-            if let trailing {
-                Text(trailing)
-                    .font(.caption)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
             }
+            .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: Self.selectionRadius, style: .continuous)
+                    .fill(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.clear))
+            )
+            // Without this only the glyphs are clickable, not the whole row.
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
+        // Zero horizontal inset so the highlight spans the list's own content width; the
+        // padding inside the background is what keeps the label off its edge. Insetting
+        // here as well pushed the whole row visibly inward.
+        .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
+        .listRowSeparator(.hidden)
+        .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 
     private func badge(for item: AppModel.Section) -> String? {
