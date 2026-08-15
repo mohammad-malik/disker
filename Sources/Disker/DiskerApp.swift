@@ -75,6 +75,11 @@ struct ContentView: View {
     private var subtitle: String {
         switch model.scanState {
         case .loaded(let result):
+            // A background re-walk after a deletion. The figures on screen are already right
+            // about what was deleted, so this is a footnote rather than a spinner.
+            if model.isReconciling {
+                return "\(result.root.size.formattedBytes) · updating…"
+            }
             // Say when the figure is stale rather than presenting cached numbers as live.
             if let cachedAt = model.cachedAt {
                 let age = RelativeDateTimeFormatter()

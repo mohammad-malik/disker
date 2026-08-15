@@ -148,7 +148,8 @@ final class AppModel {
 
     var showingMoleSheet = false
     /// Pending deletion awaiting confirmation, shown in a dialog before anything moves.
-    var pendingDeletion: (path: String, name: String, size: UInt64)?
+    var pendingDeletion: (path: String, name: String, size: UInt64, components: [String])?
+    private var reconcileTask: Task<Void, Never>?
 
     func refreshVolumes() {
         availableVolumes = VolumeCatalog.mountedVolumes()
@@ -263,6 +264,13 @@ final class AppModel {
 
         recommendations.removeAll { $0.id == recommendation.id }
 
+        // Same treatment as a deletion from the chart: update what we already know now, and
+        // re-walk behind it. Without this the chart kept showing space that a suggestion had
+        // just reclaimed.
+        let components = treeComponents(forAbsolute: recommendation.path)
+        let removed = components.flatMap { removeFromTree(at: $0) }
+        reconcile()
+
         undoManager.registerUndo(withTarget: self) { model in
             let restoreFailures = TrashService.restore(trashed)
             if let failure = restoreFailures.first {
@@ -272,6 +280,10 @@ final class AppModel {
                 model.recommendations.sort {
                     $0.tier == $1.tier ? $0.size > $1.size : $0.tier < $1.tier
                 }
+                if let removed, let components {
+                    model.insertIntoTree(removed, at: components)
+                }
+                model.reconcile()
             }
         }
         undoManager.setActionName("Move \(recommendation.title) to Trash")
@@ -464,7 +476,10 @@ final class AppModel {
         pendingDeletion = (
             path: absolutePath(for: segment),
             name: segment.node.name,
-            size: segment.node.size
+            size: segment.node.size,
+            // Carried through the confirmation so the tree edit afterwards does not have to
+            // re-derive the position by parsing the absolute path back apart.
+            components: segment.components
         )
     }
 
@@ -480,18 +495,113 @@ final class AppModel {
         }
         guard !trashed.isEmpty else { return }
 
+        // The chart updates now, from what we already know: the item is gone and every
+        // folder above it is smaller by exactly its size. Re-walking the volume is the only
+        // way to learn what *else* changed, so it still happens — in the background, without
+        // a spinner over numbers that are already correct for this edit.
+        let removed = removeFromTree(at: pending.components)
+        reconcile()
+
         undoManager.registerUndo(withTarget: self) { model in
             let restoreFailures = TrashService.restore(trashed)
             if let failure = restoreFailures.first {
                 model.lastError = failure.localizedDescription
+                return
             }
+            if let removed {
+                model.insertIntoTree(removed, at: pending.components)
+            }
+            model.reconcile()
         }
         undoManager.setActionName("Move \(pending.name) to Trash")
+    }
 
-        // The chart still shows the item until the tree is rebuilt. Rather than silently
-        // re-walking the disk, say plainly that the figures are now behind.
-        lastError =
-            "Moved \(pending.name) to the Trash (\(pending.size.formattedBytes)). "
-            + "Press ⌘Z to undo, or ⌘R to re-scan and update the chart."
+    // MARK: - Keeping the tree current
+
+    /// Whether a background re-walk is running behind an already-updated chart.
+    private(set) var isReconciling = false
+
+    /// Splits an absolute path into components relative to the scan root.
+    ///
+    /// `nil` when the path lies outside the tree currently on screen — a suggestion on
+    /// another volume, say — in which case there is nothing local to edit and the background
+    /// pass is the whole update.
+    private func treeComponents(forAbsolute path: String) -> [String]? {
+        guard path.hasPrefix(scanRoot) else { return nil }
+        let components = path.dropFirst(scanRoot.count).split(separator: "/").map(String.init)
+        return components.isEmpty ? nil : components
+    }
+
+    /// Drops the node at `components` and returns it, so undo can put it back.
+    @discardableResult
+    private func removeFromTree(at components: [String]) -> FileNode? {
+        guard case .loaded(let result) = scanState,
+            let (root, removed) = result.root.removingDescendant(at: components)
+        else { return nil }
+
+        // Anything suggested from inside what was just deleted is gone too. The background
+        // pass recomputes these properly; this only stops the list advertising a path that
+        // no longer exists in the meantime.
+        let deleted = path(joining: components)
+        recommendations.removeAll { $0.path == deleted || $0.path.hasPrefix(deleted + "/") }
+
+        adopt(root: root, from: result)
+        return removed
+    }
+
+    private func insertIntoTree(_ node: FileNode, at components: [String]) {
+        guard case .loaded(let result) = scanState,
+            let root = result.root.insertingDescendant(node, at: components)
+        else { return }
+        adopt(root: root, from: result)
+    }
+
+    /// Swaps in an edited tree, keeping the chart where the user left it.
+    ///
+    /// `drillPath` holds node references, and the edit rebuilt the spine, so those have to be
+    /// re-resolved by name or the breadcrumb keeps pointing at the pre-edit objects.
+    private func adopt(root: FileNode, from previous: ScanResult) {
+        let components = rootComponents
+        scanState = .loaded(
+            ScanResult(
+                root: root,
+                rootPath: previous.rootPath,
+                duration: previous.duration,
+                inaccessibleCount: previous.inaccessibleCount,
+                deduplicatedBytes: previous.deduplicatedBytes))
+        drillPath = [root] + (root.chain(to: components) ?? [])
+        selectedSegment = nil
+        hoveredSegment = nil
+        rebuildSegments()
+        refreshVolume()
+    }
+
+    /// Re-walks the volume behind the current chart and swaps the result in when it lands.
+    ///
+    /// Deliberately does not touch `scanState` on the way in. Setting `.scanning` would
+    /// replace a chart that is already right about the edit with a progress spinner, which
+    /// is the delay this exists to avoid. A failure is swallowed for the same reason: the
+    /// locally edited tree is still closer to the truth than the pre-deletion one.
+    private func reconcile() {
+        reconcileTask?.cancel()
+        isReconciling = true
+        reconcileTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if !Task.isCancelled { self.isReconciling = false } }
+            guard let result = try? await scanner.scan(path: scanRoot, onProgress: { _ in }),
+                !Task.isCancelled
+            else { return }
+
+            let components = rootComponents
+            scanState = .loaded(result)
+            drillPath = [result.root] + (result.root.chain(to: components) ?? [])
+            cachedAt = nil
+            selectedSegment = nil
+            hoveredSegment = nil
+            rebuildSegments()
+            recommendations = await Self.analyzeOffMain(result)
+            ScanCache.shared.save(result)
+            refreshVolume()
+        }
     }
 }
