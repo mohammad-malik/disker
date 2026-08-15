@@ -59,29 +59,48 @@ struct RecommendationBar: View {
         .frame(minWidth: 200, alignment: .leading)
     }
 
-    @ViewBuilder
+    /// Drops whole cards rather than truncating their names.
+    ///
+    /// The strip shares its width with the sidebar and the inspector, and a card reading
+    /// "User e…" tells you nothing — the category name is the entire point of it. Showing
+    /// fewer, complete cards is more useful than three abbreviated ones, so this picks the
+    /// largest count that actually fits.
     private var categoryCards: some View {
-        // Largest few categories, since the strip has limited width.
+        ViewThatFits(in: .horizontal) {
+            cards(3)
+            cards(2)
+            cards(1)
+            EmptyView()
+        }
+    }
+
+    /// The `count` largest categories, each sized to its full name.
+    private func cards(_ count: Int) -> some View {
         let top = model.moleReport?.categories
             .sorted { $0.totalSize > $1.totalSize }
-            .prefix(3) ?? []
+            .prefix(count) ?? []
 
-        ForEach(Array(top), id: \.id) { category in
-            VStack(alignment: .leading, spacing: 3) {
-                Text(category.name)
-                    .font(.subheadline.weight(.medium))
-                    .lineLimit(1)
-                Text(category.totalSize.formattedBytes)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        return HStack(spacing: 12) {
+            ForEach(Array(top), id: \.id) { category in
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(category.name)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    Text(category.totalSize.formattedBytes)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                // Measured at full width, so `ViewThatFits` decides on the real size rather
+                // than on a name that has already been squeezed.
+                .fixedSize()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                // A fill, not a second glass layer. These ride on top of the bar's material,
+                // and Apple's fix for elements over glass is fills and vibrancy rather than
+                // more glass.
+                .background(.quaternary, in: .rect(cornerRadius: 11))
+                .help(category.items.prefix(6).map(\.name).joined(separator: "\n"))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
-            // A fill, not a second glass layer. These ride on top of the bar's material,
-            // and Apple's fix for elements over glass is fills and vibrancy rather than
-            // more glass.
-            .background(.quaternary, in: .rect(cornerRadius: 11))
-            .help(category.items.prefix(6).map(\.name).joined(separator: "\n"))
         }
     }
 
