@@ -210,6 +210,27 @@ struct SunburstView: View {
             ringWidth: Double(ringWidth))
     }
 
+    /// The third line: a wedge's share of the folder being charted, or how full the disk is
+    /// when nothing is under the pointer.
+    ///
+    /// Naming what the percentage is *of* matters here. A bare "1.4%" beneath a folder name
+    /// invites reading it as a share of the whole disk, which it is not — it is a share of
+    /// whatever the chart is currently rooted at.
+    private func hubCaption(root: FileNode?, focus: SunburstSegment?) -> String? {
+        if let focus {
+            guard let total = root?.size, total > 0 else { return nil }
+            let share = Double(focus.node.size) / Double(total) * 100
+            let name = root?.name ?? "this folder"
+            // Rounding a sliver to "0.0%" reads as "nothing", which is not the same as
+            // "too small to show".
+            return share < 0.05
+                ? "under 0.1% of \(name)"
+                : String(format: "%.1f%% of %@", share, name)
+        }
+        guard let volume = model.volume else { return nil }
+        return "\(Int(volume.usedFraction * 100))% of the disk used"
+    }
+
     /// Follows the pointer: the hub takes on the colour of the wedge under it, which makes
     /// the connection between chart and readout immediate.
     private var hubTint: Color {
@@ -217,21 +238,37 @@ struct SunburstView: View {
             ?? StorageCategory.users.color
     }
 
+    /// Whatever the hub is currently describing: the wedge under the pointer, the selected
+    /// one, or the chart's own root when neither applies. Matches `hubTint`, so the colour
+    /// and the figures always refer to the same thing.
+    private var hubFocus: SunburstSegment? {
+        model.hoveredSegment ?? model.selectedSegment
+    }
+
     @ViewBuilder
     private func hub(radius: CGFloat) -> some View {
         let root = model.currentRoot
+        let focus = hubFocus
         VStack(spacing: 2) {
-            Text(root?.size.formattedBytes ?? "—")
+            // The figure and the label have to describe the same thing. The size was always
+            // the chart root's while the name followed the pointer, so hovering a 3 GB
+            // folder inside a 212 GB volume read as "Library — 212.03 GB".
+            Text((focus?.node.size ?? root?.size)?.formattedBytes ?? "—")
                 .font(.system(size: max(14, radius * 0.20), weight: .semibold, design: .rounded))
                 .foregroundStyle(.primary)
-            Text(model.hoveredSegment?.node.name ?? "Used")
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(focus?.node.name ?? "Used")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if let volume = model.volume {
-                Text("\(Int(volume.usedFraction * 100))%")
+                .minimumScaleFactor(0.8)
+            if let caption = hubCaption(root: root, focus: focus) {
+                Text(caption)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
         }
         .padding(radius * 0.18)
