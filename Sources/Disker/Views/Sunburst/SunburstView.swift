@@ -10,6 +10,13 @@ struct SunburstView: View {
 
     private let hubFraction: CGFloat = 0.30
 
+    /// How far the hub is drawn beyond the chart's inner hole, as a multiple of it.
+    ///
+    /// The overlap is the point: glass with nothing behind it renders as a flat disc, so the
+    /// first ring has to pass under the hub's edge for it to lens anything. Anything that
+    /// must stay clear of the hub — the ring-0 glyphs — has to be placed against this too.
+    private let hubOverlap: CGFloat = 1.22
+
     var body: some View {
         GeometryReader { geometry in
             let size = min(geometry.size.width, geometry.size.height)
@@ -89,7 +96,7 @@ struct SunburstView: View {
                 // beneath its edge. Sized to `innerRadius` exactly, the hub covered the one
                 // part of the chart with nothing in it — glass with nothing behind it is
                 // just a dark disc, which is precisely what it looked like.
-                hub(radius: innerRadius * 1.22)
+                hub(radius: innerRadius * hubOverlap)
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
             .contextMenu {
@@ -178,15 +185,33 @@ struct SunburstView: View {
 
         // Only label wedges with room for a glyph — anything smaller becomes visual noise.
         if segment.ring == 0, segment.sweep > 0.5 {
-            let midRadius = (ringInner + ringOuter) / 2
+            // Fit the glyph into the band that is actually visible.
+            //
+            // The hub is deliberately drawn wider than the chart's inner hole so the first
+            // ring passes beneath its edge and the glass has something to lens. That edge
+            // reaches past the middle of ring 0, where these glyphs naturally sit, so they
+            // were being clipped by it.
+            //
+            // The leftover band is only just wider than a full-size badge, so sliding the
+            // glyph outward at its usual size drops it off the ring's far edge instead —
+            // trading a clipped symbol for no symbol at all. Sizing it to the band keeps it
+            // whole and keeps the hub's overlap.
+            let bandInner = max(ringInner, innerRadius * hubOverlap)
+            let fits = (ringOuter - bandInner) / 2 - 1
+            let badgeRadius = min(ringWidth * 0.30, 20, fits)
+
+            // Below this it is a dot rather than a symbol, and reads as a blemish on the
+            // wedge rather than as a label.
+            guard badgeRadius >= 7 else { return }
+
+            let placement = bandInner + badgeRadius + 1
             let angle = segment.midAngle - .pi / 2
             let point = CGPoint(
-                x: center.x + cos(angle) * midRadius,
-                y: center.y + sin(angle) * midRadius)
+                x: center.x + cos(angle) * placement,
+                y: center.y + sin(angle) * placement)
 
             // Frosted badge behind the glyph, as in the design mock. Without it the symbol
             // competes with the wedge colour and reads as a smudge.
-            let badgeRadius = min(ringWidth * 0.30, 20)
             let badge = Path(
                 ellipseIn: CGRect(
                     x: point.x - badgeRadius, y: point.y - badgeRadius,
@@ -283,7 +308,7 @@ struct SunburstView: View {
         // Hit testing stays at the hole's real radius. The extra 22% exists to give the
         // material something to lens, and it should not also swallow clicks on the first
         // ring that now passes underneath it.
-        .contentShape(Circle().scale(1 / 1.22))
+        .contentShape(Circle().scale(1 / hubOverlap))
         .onTapGesture {
             // Clicking the hub steps back out, mirroring the drill-in gesture.
             if model.drillPath.count > 1 {
