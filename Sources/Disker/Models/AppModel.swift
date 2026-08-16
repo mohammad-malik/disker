@@ -150,6 +150,10 @@ final class AppModel {
     /// Pending deletion awaiting confirmation, shown in a dialog before anything moves.
     var pendingDeletion: (path: String, name: String, size: UInt64, components: [String])?
     private var reconcileTask: Task<Void, Never>?
+    private var reconcileQueued = false
+    /// Bumped whenever the window starts describing something else, so a background pass
+    /// still in flight for the old thing knows to throw its result away.
+    private var treeGeneration = 0
 
     func refreshVolumes() {
         availableVolumes = VolumeCatalog.mountedVolumes()
@@ -162,6 +166,10 @@ final class AppModel {
     /// Switches volumes, showing that disk's cached scan if there is one.
     func select(_ volume: Volume) async {
         guard volume.id != selectedVolume?.id else { return }
+        treeGeneration += 1
+        // The pass still draining belongs to the old disk, so its "updating…" note
+        // does not describe this one.
+        isReconciling = false
         selectedVolume = volume
         drillPath = []
         segments = []
@@ -194,6 +202,7 @@ final class AppModel {
     @discardableResult
     func loadCachedScan() async -> Bool {
         guard let entry = ScanCache.shared.load(expecting: scanRoot) else { return false }
+        treeGeneration += 1
         let result = entry.result
         hasFullDiskAccess = FullDiskAccess.isGranted
         scanState = .loaded(result)
@@ -207,6 +216,7 @@ final class AppModel {
     }
 
     func scan() async {
+        treeGeneration += 1
         scanState = .scanning(nil)
         refreshVolume()
         do {
@@ -582,26 +592,58 @@ final class AppModel {
     /// replace a chart that is already right about the edit with a progress spinner, which
     /// is the delay this exists to avoid. A failure is swallowed for the same reason: the
     /// locally edited tree is still closer to the truth than the pre-deletion one.
+    /// One pass at a time, with a second request remembered rather than started.
+    ///
+    /// Cancelling would not help: `VolumeScanner.scan` does its traversal inside a checked
+    /// continuation and never observes cancellation, so a cancelled task keeps walking the
+    /// volume regardless. Deleting several things in a row would then have a full walk
+    /// running for each, saturating the disk for minutes while the chart looked idle.
     private func reconcile() {
-        reconcileTask?.cancel()
+        guard reconcileTask == nil else {
+            reconcileQueued = true
+            return
+        }
         isReconciling = true
         reconcileTask = Task { [weak self] in
             guard let self else { return }
-            defer { if !Task.isCancelled { self.isReconciling = false } }
-            guard let result = try? await scanner.scan(path: scanRoot, onProgress: { _ in }),
-                !Task.isCancelled
-            else { return }
-
-            let components = rootComponents
-            scanState = .loaded(result)
-            drillPath = [result.root] + (result.root.chain(to: components) ?? [])
-            cachedAt = nil
-            selectedSegment = nil
-            hoveredSegment = nil
-            rebuildSegments()
-            recommendations = await Self.analyzeOffMain(result)
-            ScanCache.shared.save(result)
-            refreshVolume()
+            await runReconcilePass()
+            reconcileTask = nil
+            if reconcileQueued {
+                reconcileQueued = false
+                reconcile()
+            } else {
+                isReconciling = false
+            }
         }
+    }
+
+    private func runReconcilePass() async {
+        // What this pass is a re-walk *of*. A full scan takes seconds, and the window can
+        // move to another volume in that time — publishing then would file one disk's tree
+        // under another disk's name, with the picker and the free-space bar still naming the
+        // new one.
+        let generation = treeGeneration
+        let root = scanRoot
+
+        guard let result = try? await scanner.scan(path: root, onProgress: { _ in }),
+            generation == treeGeneration, root == scanRoot
+        else { return }
+
+        // Checked again after the analysis, which is another trip off the main actor. A
+        // deletion or an undo landing in that window would otherwise be undone here: stale
+        // recommendations reassigned, and a stale tree written to the cache.
+        let analyzed = await Self.analyzeOffMain(result)
+        guard generation == treeGeneration, root == scanRoot else { return }
+
+        let components = rootComponents
+        scanState = .loaded(result)
+        drillPath = [result.root] + (result.root.chain(to: components) ?? [])
+        cachedAt = nil
+        selectedSegment = nil
+        hoveredSegment = nil
+        rebuildSegments()
+        recommendations = analyzed
+        ScanCache.shared.save(result)
+        refreshVolume()
     }
 }
