@@ -41,32 +41,13 @@ struct DetailView: View {
             }
         }
         .animation(.spring(response: 0.35, dampingFraction: 0.9), value: model.lastError)
-        // The system's inspector, not a hand-rolled panel: it comes with edge-to-edge
-        // Liquid Glass, its own resizing, and the standard column behaviour.
-        .inspector(isPresented: inspectorPresented) {
-            InspectorView(model: model)
-                .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
-        }
+        // No `.inspector` here. The panel is a third item in the AppKit split view — see
+        // `SplitShell` for why: the modifier's panel is clipped by this column, which left it
+        // rounded along the top and square along the bottom while the sidebar beside it was
+        // rounded all the way round.
         .sheet(isPresented: $model.showingAccessSheet) {
             FullDiskAccessSheet(model: model)
         }
-    }
-
-    /// Keeps the user's preference in `showsInspector` while suppressing the panel in the
-    /// sections that have nothing to put in it.
-    ///
-    /// The setter has to ignore writes from the suppressed sections. The getter reports
-    /// `false` there regardless of the preference, and SwiftUI writes that observed value
-    /// back through the binding — which used to overwrite `showsInspector` with `false`.
-    /// Visiting Recommendations and returning to the chart silently lost a panel the user
-    /// had open, with no way to tell what had turned it off.
-    private var inspectorPresented: Binding<Bool> {
-        Binding(
-            get: { model.showsInspector && model.sectionSupportsInspector },
-            set: { newValue in
-                guard model.sectionSupportsInspector else { return }
-                model.showsInspector = newValue
-            })
     }
 
     private func errorBanner(_ message: String) -> some View {
@@ -109,10 +90,7 @@ struct DetailView: View {
                 // muddy rather than lensing anything useful.
                 .overlay(alignment: .topTrailing) {
                     if model.currentRoot != nil {
-                        CategoryLegend(
-                            root: model.currentRoot,
-                            rootComponents: model.rootComponents
-                        )
+                        CategoryLegend(totals: model.legendTotals)
                         .padding(.horizontal, 18)
                         .padding(.vertical, 10)
                         .floatingGlass(in: Capsule())

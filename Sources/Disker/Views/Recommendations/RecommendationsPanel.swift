@@ -96,13 +96,13 @@ private struct RecommendationRow: View {
             // every pointer movement invalidated rows, which at this list size was a large
             // part of why the view became unusable.
             Button {
-                model.trash(item)
+                model.act(on: item)
             } label: {
-                Image(systemName: "trash")
+                Image(systemName: actionSymbol)
             }
             .buttonStyle(.borderless)
-            .help("Move to Trash — undo with ⌘Z")
-            .accessibilityLabel("Move \(item.title) to Trash")
+            .help(actionHelp)
+            .accessibilityLabel("\(actionTitle), \(item.title)")
         }
         .padding(.vertical, 2)
         .contentShape(.rect)
@@ -117,11 +117,37 @@ private struct RecommendationRow: View {
                 NSPasteboard.general.setString(item.path, forType: .string)
             }
             Divider()
-            Button("Move to Trash", role: .destructive) { model.trash(item) }
+            Button(actionTitle, role: .destructive) { model.act(on: item) }
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(
             "\(item.title) in \(item.displayPath), \(item.size.formattedBytes). \(item.detail)")
+    }
+
+    /// The row's button describes what it actually does.
+    ///
+    /// Emptying the Trash is neither a move nor reversible, and labelling it "Move to Trash —
+    /// undo with ⌘Z" promised both. It also promised something impossible: the Trash cannot
+    /// be moved into itself, which is exactly what the row used to attempt.
+    private var actionTitle: String {
+        switch item.action {
+        case .moveToTrash: return "Move to Trash"
+        case .emptyTrash: return "Empty the Trash"
+        }
+    }
+
+    private var actionSymbol: String {
+        switch item.action {
+        case .moveToTrash: return "trash"
+        case .emptyTrash: return "trash.slash"
+        }
+    }
+
+    private var actionHelp: String {
+        switch item.action {
+        case .moveToTrash: return "Move to Trash — undo with ⌘Z"
+        case .emptyTrash: return "Delete everything in the Trash for good — this cannot be undone"
+        }
     }
 
     private var tint: Color {

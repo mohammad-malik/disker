@@ -127,19 +127,31 @@ struct RecommendationBar: View {
 }
 
 /// Category legend under the chart.
+///
+/// Explains the hues actually on screen. It used to classify the charted folder's direct
+/// children, which held only as long as those children were what the colours came from —
+/// drill into `Users` and every child is `Users/<account>`, so the legend collapsed to a
+/// single "Users" entry above a chart drawn in five colours. `StorageCategory.totals` reads
+/// the same subtree the chart does, and attributes each byte once.
 struct CategoryLegend: View {
-    let root: FileNode?
-    /// Path components from the scan root down to `root`.
-    ///
-    /// Must match what the chart was built with. Classifying on the bare child name alone
-    /// gave the legend a different answer from the wedges above it once drilled in: inside a
-    /// home directory it read `Library` as system-wide `/Library` and filed `Documents` under
-    /// "Other", so the swatches disagreed with the colours they were supposed to explain.
-    var rootComponents: [String] = []
+    let totals: [CategoryTotal]
 
     var body: some View {
+        // The strip shares its width with the sidebar and the inspector, and there are eight
+        // categories — enough to run past the chart pane. Same treatment as the cards on the
+        // recommendation bar: show the largest number of *whole* entries that fit, largest
+        // first, rather than squeezing them all in.
+        ViewThatFits(in: .horizontal) {
+            ForEach(Array(stride(from: totals.count, through: 1, by: -1)), id: \.self) { count in
+                entries(count)
+            }
+            EmptyView()
+        }
+    }
+
+    private func entries(_ count: Int) -> some View {
         HStack(spacing: 18) {
-            ForEach(totals, id: \.category) { entry in
+            ForEach(totals.prefix(count)) { entry in
                 HStack(spacing: 5) {
                     Circle()
                         .fill(entry.category.color)
@@ -152,17 +164,10 @@ struct CategoryLegend: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                // Measured at full width, so `ViewThatFits` chooses on the real size rather
+                // than on a label that has already been squeezed.
+                .fixedSize()
             }
         }
-    }
-
-    private var totals: [(category: StorageCategory, size: UInt64)] {
-        guard let root else { return [] }
-        var sums: [StorageCategory: UInt64] = [:]
-        for child in root.children {
-            let category = StorageCategory.classify(components: rootComponents + [child.name])
-            sums[category, default: 0] &+= child.size
-        }
-        return sums.sorted { $0.value > $1.value }.map { (category: $0.key, size: $0.value) }
     }
 }

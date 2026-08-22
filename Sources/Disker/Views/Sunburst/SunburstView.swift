@@ -7,6 +7,9 @@ struct SunburstView: View {
     /// respond to each other's interaction.
     let namespace: Namespace.ID
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Drives the hub's own affordance. Kept here rather than read from the model: nothing
+    /// outside this view needs to know the pointer is over the hub.
+    @State private var hubHovered = false
 
     private let hubFraction: CGFloat = 0.30
 
@@ -117,6 +120,10 @@ struct SunburstView: View {
             // and sidebar carry the per-item detail.
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilitySummary)
+            // The hub's own label is swallowed by the element above, so its action is
+            // republished here — otherwise selecting the charted folder would be reachable
+            // by pointer only.
+            .accessibilityAction(named: "Select this folder") { model.selectCurrentRoot() }
         }
     }
 
@@ -242,7 +249,10 @@ struct SunburstView: View {
     /// invites reading it as a share of the whole disk, which it is not — it is a share of
     /// whatever the chart is currently rooted at.
     private func hubCaption(root: FileNode?, focus: SunburstSegment?) -> String? {
-        if let focus {
+        // The charted folder is not a share of itself. Selecting it from the hub made the
+        // readout say "Data — 100.0% of Data", so the folder falls back to the disk figure,
+        // which is the one fact about it the chart does not already state.
+        if let focus, focus.node !== root {
             guard let total = root?.size, total > 0 else { return nil }
             let share = Double(focus.node.size) / Double(total) * 100
             let name = root?.name ?? "this folder"
@@ -274,6 +284,7 @@ struct SunburstView: View {
     private func hub(radius: CGFloat) -> some View {
         let root = model.currentRoot
         let focus = hubFocus
+        let isSelected = model.selectedSegment?.id == -1
         VStack(spacing: 2) {
             // The figure and the label have to describe the same thing. The size was always
             // the chart root's while the name followed the pointer, so hovering a 3 GB
@@ -283,12 +294,28 @@ struct SunburstView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
-            Text(focus?.node.name ?? "Used")
+            Text(focus?.node.name ?? root?.name ?? "Used")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
-            if let caption = hubCaption(root: root, focus: focus) {
+            // The third line is where the hub says what clicking it does. A circle of
+            // figures gives no hint that it is a control at all, and the action it performs
+            // now — selecting the folder being charted — has no other entry point, so the
+            // hint replaces the caption while the pointer is on it rather than waiting for a
+            // tooltip.
+            if hubHovered, root != nil {
+                // Text alone, no glyph. A `Label` centres the icon and the text *together*,
+                // which pushed the words about half a glyph-width right of the size and name
+                // stacked above them — three lines in a circle, and the middle one visibly
+                // off-axis. The pointer cursor and the hub's lift already say "clickable"; the
+                // symbol was buying nothing worth breaking the column for.
+                Text(isSelected ? "Selected" : "Click to select this folder")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+            } else if let caption = hubCaption(root: root, focus: focus) {
                 Text(caption)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -305,18 +332,40 @@ struct SunburstView: View {
         // and Apple's warning applies: when everything is tinted, nothing stands out.
         .floatingGlass(in: Circle(), tint: hubTint.opacity(0.18), interactive: true)
         .glassEffectID("hub", in: namespace)
+        // A hair larger under the pointer, so the shape itself answers "is this clickable?"
+        // before the label does. Small enough that the ring beneath the hub's overhang does
+        // not visibly shift.
+        .scaleEffect(hubHovered ? 1.02 : 1)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.25, dampingFraction: 0.85),
+            value: hubHovered)
         // Hit testing stays at the hole's real radius. The extra 22% exists to give the
         // material something to lens, and it should not also swallow clicks on the first
         // ring that now passes underneath it.
         .contentShape(Circle().scale(1 / hubOverlap))
-        .onTapGesture {
-            // Clicking the hub steps back out, mirroring the drill-in gesture.
-            if model.drillPath.count > 1 {
-                withAnimation(reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.85)) {
-                    model.drillUp(to: model.drillPath.count - 2)
-                }
+        .onHover { inside in
+            hubHovered = inside
+            // The pointer is the other half of the affordance, and it is the half that
+            // works before the user has read anything.
+            if inside {
+                NSCursor.pointingHand.set()
+            } else {
+                NSCursor.arrow.set()
             }
         }
-        .accessibilityLabel("Go up one level")
+        .onTapGesture {
+            // Selects the folder the chart is centred on — the one thing on screen that has
+            // no wedge to click. Stepping back out used to live here, which made the hub the
+            // only control whose click undid the gesture that reached it; the breadcrumb
+            // above already goes up, as does ⌘↑.
+            withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.9)) {
+                model.selectCurrentRoot()
+            }
+        }
+        .help(
+            root.map { "Select \($0.name) — shows its details in the inspector" }
+                ?? "Select this folder")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(root.map { "Select \($0.name)" } ?? "Select this folder")
     }
 }

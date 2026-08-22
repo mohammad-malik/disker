@@ -13,6 +13,19 @@ public struct SunburstSegment: Sendable, Identifiable {
     /// Path components from the chart root down to this node, for Finder reveal and drill-down.
     public let components: [String]
 
+    public init(
+        id: Int, node: FileNode, ring: Int, startAngle: Double, endAngle: Double,
+        category: StorageCategory, components: [String]
+    ) {
+        self.id = id
+        self.node = node
+        self.ring = ring
+        self.startAngle = startAngle
+        self.endAngle = endAngle
+        self.category = category
+        self.components = components
+    }
+
     public var sweep: Double { endAngle - startAngle }
     public var midAngle: Double { (startAngle + endAngle) / 2 }
 }

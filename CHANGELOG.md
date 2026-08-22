@@ -1,6 +1,61 @@
 # Changelog
 
-## Unreleased
+## v1.6 — 2026-08-23
+
+### Emptying the Trash
+
+- The "Empty the Trash" suggestion failed every single time it was clicked, with
+  "Trash couldn't be moved to the trash". Every deletion in Disker went through
+  `FileManager.trashItem`, and that call refuses to move the Trash into itself. Emptying is a
+  different operation on a different target — the *contents* of that folder — so it is now
+  modelled as one rather than bolted onto the deletion path.
+- It is the only irreversible action in the app, so it asks first, says plainly that the items
+  are deleted permanently, and registers no undo. The undo stack is cleared when it runs:
+  every entry in it restores *from* the Trash, so this is the one operation that can
+  invalidate all of them at once.
+- Only a real per-account Trash qualifies. The rule matched any directory named `.Trash`
+  anywhere on the volume, which would have permanently deleted the contents of a checked-in
+  fixture, a synced folder, or a `.Trash` inside a mounted image on the strength of its name.
+- A partial empty leaves the suggestion and the chart alone. Some items can be locked; the row
+  is the only way to retry what is left, and dropping it would report space as reclaimed while
+  it is still occupied.
+
+### The hub selects the folder you are looking at
+
+- Clicking the middle of the chart used to step back out — the one control whose click undid
+  the gesture that reached it. It now selects the folder being charted, which nothing else
+  could do: that folder has no wedge, so Reveal in Finder and Move to Trash were only ever
+  offered for things *inside* it. Going up is still the breadcrumb, and ⌘↑.
+- The hub says so on hover, in the line that otherwise carries the percentage, and takes the
+  pointing-hand cursor. A circle of figures gives no hint that it is a control at all.
+
+### The legend describes the colours on screen
+
+- It classified the charted folder's *direct children*, which held only as long as those
+  children were where the colours came from. Drill into `Users` and every child is
+  `Users/<account>`, so the legend collapsed to a single "Users" entry above a chart drawn in
+  five colours it never mentioned.
+- Totals are now rolled up from the same subtree the chart draws, attributed at the depth
+  where the category is actually decided, and counted once each — so they still add up to the
+  folder's own size. The walk stops as soon as the classification can no longer change, which
+  is what keeps it affordable on a full volume.
+
+### Corners and gaps
+
+- The inspector is a split-view item rather than SwiftUI's `.inspector`, whose panel was
+  clipped by the column it lived in: rounded across the top, square at the bottom left, and
+  cut to the window's much larger radius at the bottom right — three different corners on one
+  panel, beside a sidebar rounded evenly on all four.
+- Its outer edge now stands as far off the window as the sidebar's does. macOS insets an inset
+  sidebar's *leading* edge, which is the outer edge on the left and the inner one on the
+  right, so the trailing panel sat flush against the window. The gap is taken with an empty
+  split item, leaving the system's own radius and specular edge untouched.
+- The buttons in the Mole sheet's header and footer no longer clash with its corners. A 5pt
+  corner sat 12pt inside a 26pt one, so the gap between button and sheet pinched shut
+  diagonally. They are capsules now, which is what Apple's concentricity rule works out to at
+  these sizes, and the rows sit far enough in to clear the arc.
+
+## v1.5 — 2026-08-15
 
 ### Drilling into an outer ring no longer loses its way
 

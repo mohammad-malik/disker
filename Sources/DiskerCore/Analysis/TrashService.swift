@@ -2,10 +2,14 @@ import Foundation
 
 /// Moves files to the Trash, and puts them back.
 ///
-/// Every deletion path in Disker goes through here. Nothing calls `unlink` or
-/// `removeItem` — a disk analyzer is used precisely when someone is under pressure to free
-/// space quickly, which is exactly when an irreversible delete does real damage. The Trash
-/// keeps the decision reversible both through Disker's own undo and through Finder.
+/// Every deletion path in Disker goes through here, and all but one of them is reversible —
+/// a disk analyzer is used precisely when someone is under pressure to free space quickly,
+/// which is exactly when an irreversible delete does real damage. The Trash keeps the
+/// decision reversible both through Disker's own undo and through Finder.
+///
+/// The exception is `emptyTrash`, which cannot be anything else: emptying the Trash *is*
+/// permanent deletion, and `trashItem` refuses to move the Trash into itself. It is the only
+/// call to `removeItem` in the app.
 public enum TrashService {
 
     public struct TrashedItem: Sendable {
@@ -52,6 +56,66 @@ public enum TrashService {
             }
         }
         return (trashed, failures)
+    }
+
+    /// Deletes everything inside a Trash folder, permanently.
+    ///
+    /// The one place in Disker that removes a file outright, and it exists because the
+    /// alternative is not available: `trashItem` cannot move the Trash into the Trash, so
+    /// the "Empty the Trash" suggestion had no way to act at all. Everything here is already
+    /// marked for deletion by the user, which is what makes an irreversible delete
+    /// defensible — but only after its own confirmation, and with no undo offered, because
+    /// there would be nothing to undo it from.
+    ///
+    /// The folder itself is kept: macOS expects `~/.Trash` to exist, and Finder recreates it
+    /// anyway. Failures are collected per item rather than aborting, for the same reason
+    /// `moveToTrash` reports them that way — one locked item should not strand the rest.
+    public static func emptyTrash(at path: String) -> (freed: UInt64, failures: [TrashError]) {
+        let manager = FileManager.default
+        var failures: [TrashError] = []
+        var freed: UInt64 = 0
+
+        let contents: [String]
+        do {
+            contents = try manager.contentsOfDirectory(atPath: path)
+        } catch {
+            return (0, [.failed(path: path, underlying: error.localizedDescription)])
+        }
+
+        for name in contents {
+            let item = (path as NSString).appendingPathComponent(name)
+            // Measured before the delete, so the caller can report what was actually freed
+            // rather than what the last scan thought was there.
+            let size = allocatedSize(of: item)
+            do {
+                try manager.removeItem(atPath: item)
+                freed &+= size
+            } catch {
+                failures.append(.failed(path: item, underlying: error.localizedDescription))
+            }
+        }
+        return (freed, failures)
+    }
+
+    /// Bytes on disk under `path`, following no symlinks and skipping what cannot be read.
+    private static func allocatedSize(of path: String) -> UInt64 {
+        let url = URL(fileURLWithPath: path)
+        let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey, .isDirectoryKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else { return 0 }
+
+        if values.isDirectory == true {
+            var total: UInt64 = 0
+            let enumerator = FileManager.default.enumerator(
+                at: url, includingPropertiesForKeys: Array(keys),
+                options: [.skipsPackageDescendants])
+            while let child = enumerator?.nextObject() as? URL {
+                let childValues = try? child.resourceValues(forKeys: keys)
+                if childValues?.isDirectory == true { continue }
+                total &+= UInt64(childValues?.totalFileAllocatedSize ?? 0)
+            }
+            return total
+        }
+        return UInt64(values.totalFileAllocatedSize ?? 0)
     }
 
     /// Moves items back where they came from.

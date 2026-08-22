@@ -103,7 +103,9 @@ struct MoleCleanupSheet: View {
                 .help("Back to the options")
             }
         }
-        .padding(12)
+        // Same treatment as the footer: these buttons sit in the sheet's top corners.
+        .buttonBorderShape(.capsule)
+        .padding(Self.chromeInset)
     }
 
     private var headerTitle: String {
@@ -384,8 +386,20 @@ struct MoleCleanupSheet: View {
                         ? "Hides this window. Mole keeps running and you can reopen it."
                         : "Closes this window.")
         }
-        .padding(12)
+        .buttonBorderShape(.capsule)
+        .padding(Self.chromeInset)
     }
+
+    /// Inset for the sheet's header and footer rows.
+    ///
+    /// Tahoe gives this sheet a ~26pt continuous corner, and these rows put buttons in those
+    /// corners. At the old 12pt the leading button sat *inside* the arc with a ~5pt corner of
+    /// its own, so the gap between button and sheet edge pinched shut diagonally and the two
+    /// curves visibly disagreed. Apple's concentricity rule is that a nested corner equals the
+    /// outer radius minus the gap, and at these control heights that arrives at a capsule —
+    /// which is also the platform's own shape for action buttons in this position, so the
+    /// arithmetic and the system default agree.
+    private static let chromeInset: CGFloat = 16
 
     private func start() {
         session.run(model.moleConfiguration)

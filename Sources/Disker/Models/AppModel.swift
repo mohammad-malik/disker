@@ -112,6 +112,29 @@ final class AppModel {
         showsInspector = true
     }
 
+    /// The folder the chart is centred on, expressed as a selectable segment.
+    ///
+    /// The hub is the only way to act on that folder: it has no wedge of its own, so before
+    /// this there was no way to select it, and the inspector's Reveal and Move to Trash
+    /// buttons only ever appeared for something *inside* it.
+    ///
+    /// `ring: -1` and `id: -1` keep it outside the drawn geometry. The chart highlights by
+    /// segment id and hit-tests by ring, and both start at 0, so a negative pair cannot be
+    /// mistaken for a wedge and light one up.
+    var currentRootSegment: SunburstSegment? {
+        guard let root = currentRoot else { return nil }
+        return SunburstSegment(
+            id: -1, node: root, ring: -1, startAngle: 0, endAngle: 2 * .pi,
+            category: StorageCategory.classify(components: rootComponents),
+            components: rootComponents)
+    }
+
+    /// Selects the folder the chart is centred on, as the hub's click does.
+    func selectCurrentRoot() {
+        guard let segment = currentRootSegment else { return }
+        selectFromClick(segment)
+    }
+
     var recommendations: [Recommendation] = [] {
         didSet { recommendationGroups = RecommendationGroup.group(recommendations) }
     }
@@ -261,9 +284,70 @@ final class AppModel {
         recommendations.filter { $0.tier == .safe }.reduce(0) { $0 &+ $1.size }
     }
 
+    /// Carries out a suggestion, or asks first when it cannot be taken back.
+    ///
+    /// The two actions are not interchangeable. A move to the Trash is reversible, so it
+    /// happens on the click and offers ⌘Z; emptying the Trash is permanent, so it stops for
+    /// a confirmation the way a deletion from the chart does.
+    func act(on recommendation: Recommendation) {
+        switch recommendation.action {
+        case .moveToTrash:
+            trash(recommendation)
+        case .emptyTrash:
+            pendingTrashEmpty = recommendation
+        }
+    }
+
+    /// The "Empty the Trash" suggestion waiting on its confirmation.
+    var pendingTrashEmpty: Recommendation?
+
+    /// Deletes the contents of the Trash for good.
+    ///
+    /// No undo is registered, and deliberately so: there is nothing left to restore from, and
+    /// an Undo item that silently does nothing is worse than none. The stack is cleared
+    /// whenever anything was actually deleted — partly because an older entry would sit under
+    /// a menu item the user has every reason to read as "put back what I just emptied", and
+    /// partly because those entries restore *from* the Trash, so this is the one operation
+    /// that can invalidate every one of them at once.
+    func confirmEmptyTrash() {
+        guard let recommendation = pendingTrashEmpty else { return }
+        pendingTrashEmpty = nil
+
+        let (freed, failures) = TrashService.emptyTrash(at: recommendation.path)
+        if freed > 0 {
+            undoManager.removeAllActions()
+        }
+
+        // A partial empty leaves files on disk, so neither the row nor the tree may be
+        // dropped. The row is the only way to retry what is left, and removing the node would
+        // report space as reclaimed that is still occupied — the one direction a disk analyzer
+        // must never be wrong in. The figures stay as they were until the background re-walk
+        // lands, which understates what was freed rather than overstating it.
+        if let first = failures.first {
+            lastError =
+                freed == 0
+                ? first.localizedDescription
+                : "Emptied \(freed.formattedBytes). "
+                    + "\(failures.count == 1 ? "1 item" : "\(failures.count) items") could not "
+                    + "be removed, so the Trash is still listed. \(first.localizedDescription)"
+            if freed > 0 { reconcile() }
+            return
+        }
+
+        recommendations.removeAll { $0.id == recommendation.id }
+
+        // The folder still exists, now empty. Dropping the node is the honest edit for the
+        // *sizes*, which is what the chart shows, and the background pass puts the empty
+        // folder back a moment later.
+        if let components = treeComponents(forAbsolute: recommendation.path) {
+            removeFromTree(at: components)
+        }
+        reconcile()
+    }
+
     /// Moves a suggestion's target to the Trash and registers the inverse with the
     /// UndoManager, so Cmd+Z puts it straight back.
-    func trash(_ recommendation: Recommendation) {
+    private func trash(_ recommendation: Recommendation) {
         let (trashed, failures) = TrashService.moveToTrash(paths: [recommendation.path])
 
         if let first = failures.first {
@@ -309,12 +393,20 @@ final class AppModel {
     /// component of any path below it.
     var rootComponents: [String] { drillPath.dropFirst().map(\.name) }
 
+    /// Legend entries for whatever the chart is currently showing.
+    ///
+    /// Derived here, beside the segments, rather than in the legend's own `body`. The view
+    /// re-evaluates on every hover, and this walks part of the tree.
+    private(set) var legendTotals: [CategoryTotal] = []
+
     func rebuildSegments() {
         guard let root = currentRoot else {
             segments = []
+            legendTotals = []
             return
         }
         segments = SunburstLayout.build(root: root, rootComponents: rootComponents)
+        legendTotals = StorageCategory.totals(for: root, rootComponents: rootComponents)
     }
 
     /// Drills into a wedge, keeping every level between here and it.

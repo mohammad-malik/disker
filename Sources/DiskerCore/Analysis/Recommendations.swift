@@ -8,6 +8,8 @@ public struct Recommendation: Sendable, Identifiable {
     public let size: UInt64
     public let tier: Tier
     public let symbolName: String
+    /// What acting on this suggestion actually does.
+    public let action: Action
 
     /// Location with the home directory abbreviated to `~`.
     ///
@@ -22,7 +24,7 @@ public struct Recommendation: Sendable, Identifiable {
 
     init(
         title: String, detail: String, path: String, size: UInt64,
-        tier: Tier, symbolName: String
+        tier: Tier, symbolName: String, action: Action = .moveToTrash
     ) {
         self.title = title
         self.detail = detail
@@ -30,6 +32,7 @@ public struct Recommendation: Sendable, Identifiable {
         self.size = size
         self.tier = tier
         self.symbolName = symbolName
+        self.action = action
 
         let home = NSHomeDirectory()
         let parent = (path as NSString).deletingLastPathComponent
@@ -42,7 +45,24 @@ public struct Recommendation: Sendable, Identifiable {
     func reclassified(as tier: Tier, detail: String) -> Recommendation {
         Recommendation(
             title: title, detail: detail, path: path, size: size,
-            tier: tier, symbolName: symbolName)
+            tier: tier, symbolName: symbolName, action: action)
+    }
+
+    /// How a suggestion is carried out.
+    ///
+    /// Not every suggestion is a move to the Trash, and one of them cannot be: the Trash
+    /// itself. `FileManager.trashItem` refuses to put the Trash inside the Trash, so the
+    /// "Empty the Trash" row failed with "Trash couldn't be moved to the trash" every time
+    /// it was clicked. Emptying is a different operation on a different
+    /// target — the *contents* of that folder, deleted outright — so it is modelled as one
+    /// rather than bolted onto the deletion path.
+    public enum Action: Sendable {
+        /// Reversible: the item goes to the Trash and ⌘Z brings it back.
+        case moveToTrash
+        /// Irreversible: everything inside the folder is deleted for good. Confirmed
+        /// separately, and never registered with the UndoManager, because nothing can put
+        /// it back.
+        case emptyTrash
     }
 
     /// How much scrutiny an item deserves before deletion.
@@ -202,11 +222,13 @@ public enum RecommendationEngine {
     ) -> Recommendation? {
         guard node.size > 0 else { return nil }
 
-        if components.last == ".Trash" {
+        if isUserTrash(components: components) {
             return Recommendation(
                 title: "Empty the Trash",
-                detail: "\(node.fileCount.formatted()) items already marked for deletion.",
-                path: path, size: node.size, tier: .safe, symbolName: "trash.fill")
+                detail: "\(node.fileCount.formatted()) items already marked for deletion. "
+                    + "Emptying is permanent.",
+                path: path, size: node.size, tier: .safe, symbolName: "trash.fill",
+                action: .emptyTrash)
         }
 
         if let name = components.last, regenerableDirectories.contains(name) {
@@ -233,6 +255,23 @@ public enum RecommendationEngine {
         }
 
         return nil
+    }
+
+    /// Whether these components name a real per-account Trash.
+    ///
+    /// The position matters, not just the name. This rule used to match any directory called
+    /// `.Trash` anywhere on the volume, and it hands out the one action in the app that
+    /// deletes without a Trash to recover from — so a checked-in fixture directory, a synced
+    /// folder, or a `.Trash` inside a disk image would have had its contents destroyed on the
+    /// strength of its name alone. Only `Users/<account>/.Trash` is somewhere macOS actually
+    /// puts deleted files.
+    ///
+    /// Anything else named `.Trash` simply falls through to the ordinary rules, which is the
+    /// safe default: at worst it goes unsuggested.
+    static func isUserTrash(components: [String]) -> Bool {
+        guard components.count == 3, components.last == ".Trash" else { return false }
+        // `home` is the automount path to the same place.
+        return components.first == "Users" || components.first == "home"
     }
 
     private static func classifyFile(

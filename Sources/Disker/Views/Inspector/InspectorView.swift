@@ -22,9 +22,9 @@ struct InspectorView: View {
             }
             .padding(16)
         }
-        // No width, no material. This is presented through the `.inspector` modifier, which
-        // supplies the column sizing and renders the panel in Liquid Glass itself — a frame
-        // and a glass card here would have been a second material inside the first.
+        // No width, no material. This is hosted by an `NSSplitViewItem` inspector, which
+        // supplies the column sizing and renders the panel itself — a frame and a glass card
+        // here would have been a second material inside the first.
     }
 
     @ViewBuilder

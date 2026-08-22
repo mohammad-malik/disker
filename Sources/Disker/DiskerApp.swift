@@ -31,7 +31,12 @@ struct ContentView: View {
     var body: some View {
         // AppKit, not `NavigationSplitView` — see `SplitShell` for the four SwiftUI
         // routes to behind-window translucency that all ended up under an opaque pane.
-        SplitShell(model: model)
+        // Reading the two properties here — rather than inside the representable — is what
+        // registers them as dependencies of this body, so the column actually moves when the
+        // toolbar button or the ⌃⌘I menu item flips the preference.
+        SplitShell(
+            model: model,
+            inspectorVisible: model.showsInspector && model.sectionSupportsInspector)
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
@@ -68,6 +73,24 @@ struct ContentView: View {
                 Text(
                     "\(pending.name) — \(pending.size.formattedBytes)\n\(pending.path)\n\n"
                         + "It goes to the Trash, so you can put it back with ⌘Z or from Finder.")
+            }
+        }
+        // Separate from the dialog above because the promise is the opposite one. Everything
+        // else in Disker goes to the Trash and comes back with ⌘Z; this is the one action
+        // that cannot, so it says so instead of borrowing the reassuring wording.
+        .confirmationDialog(
+            "Empty the Trash?",
+            isPresented: .init(
+                get: { model.pendingTrashEmpty != nil },
+                set: { if !$0 { model.pendingTrashEmpty = nil } })
+        ) {
+            Button("Empty the Trash", role: .destructive) { model.confirmEmptyTrash() }
+            Button("Cancel", role: .cancel) { model.pendingTrashEmpty = nil }
+        } message: {
+            if let pending = model.pendingTrashEmpty {
+                Text(
+                    "\(pending.size.formattedBytes) in \(pending.path)\n\n"
+                        + "These items are deleted permanently. This cannot be undone.")
             }
         }
     }

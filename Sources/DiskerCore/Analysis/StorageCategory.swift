@@ -63,4 +63,70 @@ public enum StorageCategory: String, Sendable, CaseIterable, Identifiable {
             return .users
         }
     }
+
+    /// Whether descending past `components` could still change the answer.
+    ///
+    /// Everything outside a home directory is decided by the first component alone, and
+    /// inside one by the third. Past that point every descendant inherits its ancestor's
+    /// category, which is what makes a full rollup affordable: the walk stops as soon as the
+    /// classification is settled rather than visiting a volume's worth of nodes.
+    static func canRefine(components: [String]) -> Bool {
+        guard let first = components.first else { return true }
+        guard first == "Users" || first == "home" else { return false }
+        return components.count < 3
+    }
+
+    /// Bytes per category beneath `root`, counted once each.
+    ///
+    /// The legend used to classify only the charted folder's *direct children*, which made it
+    /// disagree with the chart as soon as you drilled in: inside `Users` every child is
+    /// `Users/<account>`, so the whole legend collapsed to one entry reading "Users" while
+    /// the rings below it were drawn in five colours the legend never mentioned.
+    ///
+    /// Sizes are attributed at the depth where the category is actually decided, and a
+    /// folder only contributes the bytes that are not already inside a child — so a subtree
+    /// whose category differs from its parent's is counted under its own colour and nowhere
+    /// else, and the totals still add up to the root.
+    public static func totals(
+        for root: FileNode, rootComponents: [String] = []
+    ) -> [CategoryTotal] {
+        var sums: [StorageCategory: UInt64] = [:]
+
+        func walk(_ node: FileNode, components: [String]) {
+            let category = classify(components: components)
+            guard canRefine(components: components), !node.children.isEmpty else {
+                sums[category, default: 0] &+= node.size
+                return
+            }
+            var inChildren: UInt64 = 0
+            for child in node.children {
+                walk(child, components: components + [child.name])
+                inChildren &+= child.size
+            }
+            // Whatever sits directly in this folder rather than in one of its children.
+            if node.size > inChildren {
+                sums[category, default: 0] &+= node.size - inChildren
+            }
+        }
+
+        for child in root.children {
+            walk(child, components: rootComponents + [child.name])
+        }
+        return sums
+            .map { CategoryTotal(category: $0.key, size: $0.value) }
+            .sorted { $0.size > $1.size }
+    }
+}
+
+/// One legend entry: a category and how much of the charted folder it accounts for.
+public struct CategoryTotal: Sendable, Identifiable, Equatable {
+    public let category: StorageCategory
+    public let size: UInt64
+
+    public var id: StorageCategory { category }
+
+    public init(category: StorageCategory, size: UInt64) {
+        self.category = category
+        self.size = size
+    }
 }
