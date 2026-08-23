@@ -4,56 +4,60 @@
 
 ### Emptying the Trash
 
-- The "Empty the Trash" suggestion failed every single time it was clicked, with
-  "Trash couldn't be moved to the trash". Every deletion in Disker went through
-  `FileManager.trashItem`, and that call refuses to move the Trash into itself. Emptying is a
-  different operation on a different target — the *contents* of that folder — so it is now
-  modelled as one rather than bolted onto the deletion path.
-- It is the only irreversible action in the app, so it asks first, says plainly that the items
-  are deleted permanently, and registers no undo. The undo stack is cleared when it runs:
-  every entry in it restores *from* the Trash, so this is the one operation that can
-  invalidate all of them at once.
-- Only a real per-account Trash qualifies. The rule matched any directory named `.Trash`
-  anywhere on the volume, which would have permanently deleted the contents of a checked-in
-  fixture, a synced folder, or a `.Trash` inside a mounted image on the strength of its name.
-- A partial empty leaves the suggestion and the chart alone. Some items can be locked; the row
-  is the only way to retry what is left, and dropping it would report space as reclaimed while
-  it is still occupied.
+- "Empty the Trash" failed every time you clicked it. It said "Trash couldn't be moved to the
+  trash", which is exactly what it was trying to do. Every deletion in Disker goes through
+  `FileManager.trashItem`, and that call refuses to put the Trash inside itself. Emptying acts
+  on a different target, the contents of the folder rather than the folder, so it is now
+  written as its own operation.
+- Emptying is the only irreversible thing Disker does. It confirms first, says the items are
+  deleted permanently, and registers no undo. It also clears the undo stack, because every
+  entry in that stack restores a file *from* the Trash and emptying destroys all of them at
+  once.
+- Only a real per-account Trash qualifies. The old rule matched any folder named `.Trash`
+  anywhere on the volume: a checked-in test fixture, a synced folder, a `.Trash` inside a
+  mounted disk image. Each would have lost its contents on the strength of the name.
+- When some items are locked and the empty is partial, the row and the chart stay as they
+  were. The row is the only way to retry what is left, and removing it would report space as
+  reclaimed while it is still on disk.
 
 ### The hub selects the folder you are looking at
 
-- Clicking the middle of the chart used to step back out — the one control whose click undid
-  the gesture that reached it. It now selects the folder being charted, which nothing else
-  could do: that folder has no wedge, so Reveal in Finder and Move to Trash were only ever
-  offered for things *inside* it. Going up is still the breadcrumb, and ⌘↑.
-- The hub says so on hover, in the line that otherwise carries the percentage, and takes the
-  pointing-hand cursor. A circle of figures gives no hint that it is a control at all.
+- Clicking the middle of the chart used to step back out, which made it the one control whose
+  click undid the gesture that reached it. It now selects the folder being charted. Nothing
+  else could reach that folder, because it has no wedge of its own, so Show in Finder and Move
+  to Trash only ever appeared for things inside it. The breadcrumb still goes up, and so does
+  ⌘↑.
+- Hover the hub and it tells you what the click does, in the line that otherwise carries the
+  percentage. The pointer turns into a hand. A circle of figures gives no sign that it is a
+  control at all.
 
 ### The legend describes the colours on screen
 
-- It classified the charted folder's *direct children*, which held only as long as those
-  children were where the colours came from. Drill into `Users` and every child is
-  `Users/<account>`, so the legend collapsed to a single "Users" entry above a chart drawn in
-  five colours it never mentioned.
-- Totals are now rolled up from the same subtree the chart draws, attributed at the depth
-  where the category is actually decided, and counted once each — so they still add up to the
-  folder's own size. The walk stops as soon as the classification can no longer change, which
-  is what keeps it affordable on a full volume.
+- The legend classified the charted folder's direct children, which works only while those
+  children are where the colours come from. Drill into `Users` and every child is
+  `Users/<account>`, so the legend collapsed to one entry reading "Users" above a chart drawn
+  in five colours it never mentioned.
+- It now rolls totals up from the same subtree the chart draws. Each folder's bytes count once,
+  at the depth where its category is decided, so the numbers still add up to the folder's own
+  size. The walk stops where classification can no longer change, so it never crawls the whole
+  volume to build a legend.
 
-### Corners and gaps
+### The panels line up
 
-- The inspector is a split-view item rather than SwiftUI's `.inspector`, whose panel was
-  clipped by the column it lived in: rounded across the top, square at the bottom left, and
-  cut to the window's much larger radius at the bottom right — three different corners on one
-  panel, beside a sidebar rounded evenly on all four.
-- Its outer edge now stands as far off the window as the sidebar's does. macOS insets an inset
-  sidebar's *leading* edge, which is the outer edge on the left and the inner one on the
-  right, so the trailing panel sat flush against the window. The gap is taken with an empty
-  split item, leaving the system's own radius and specular edge untouched.
-- The buttons in the Mole sheet's header and footer no longer clash with its corners. A 5pt
-  corner sat 12pt inside a 26pt one, so the gap between button and sheet pinched shut
-  diagonally. They are capsules now, which is what Apple's concentricity rule works out to at
-  these sizes, and the rows sit far enough in to clear the arc.
+- The inspector is a split-view item instead of SwiftUI's `.inspector`. That modifier's panel
+  was clipped by the column it lived in, leaving three different corners on one panel: rounded
+  across the top, square at the bottom left, cut to the window's much larger radius at the
+  bottom right. The sidebar beside it was rounded evenly on all four.
+- Its outer edge now sits as far off the window as the sidebar's. macOS insets an inset
+  sidebar's *leading* edge, which is the outer edge on the left and the inner one on the right,
+  so the trailing panel ended up flush against the window. An empty 8pt split item supplies the
+  gap, which leaves the system's radius and specular edge alone. Insetting the panel's own
+  contents does not work, because the system paints across the item's full width and leaves a
+  step below the corner.
+- The buttons in the Mole sheet no longer fight its corners. A 5pt corner sat 12pt inside a
+  26pt one, and the gap between the two pinched shut diagonally. They are capsules now, which
+  is where Apple's concentricity rule lands at this size, and the header and footer sit 16pt in
+  so nothing crowds the arc.
 
 ## v1.5 — 2026-08-15
 
