@@ -10,6 +10,8 @@ public struct Recommendation: Sendable, Identifiable {
     public let symbolName: String
     /// What acting on this suggestion actually does.
     public let action: Action
+    /// What kind of thing this is, which is what lets several of them collapse into one row.
+    public let family: Family
 
     /// Location with the home directory abbreviated to `~`.
     ///
@@ -24,8 +26,9 @@ public struct Recommendation: Sendable, Identifiable {
 
     init(
         title: String, detail: String, path: String, size: UInt64,
-        tier: Tier, symbolName: String, action: Action = .moveToTrash
+        tier: Tier, symbolName: String, family: Family, action: Action = .moveToTrash
     ) {
+        self.family = family
         self.title = title
         self.detail = detail
         self.path = path
@@ -45,7 +48,96 @@ public struct Recommendation: Sendable, Identifiable {
     func reclassified(as tier: Tier, detail: String) -> Recommendation {
         Recommendation(
             title: title, detail: detail, path: path, size: size,
-            tier: tier, symbolName: symbolName, action: action)
+            tier: tier, symbolName: symbolName, family: family, action: action)
+    }
+
+    /// What a suggestion *is*, as opposed to where it was found.
+    ///
+    /// A real developer's disk turns up the same artefact over and over: fifteen
+    /// `node_modules`, four virtual environments, three `.next` directories. Listed one per
+    /// row they bury everything else, and no single row is worth acting on — the interesting
+    /// figure is what all the `node_modules` come to together. Two suggestions share a family
+    /// when they are the same kind of thing, whatever project or app they belong to.
+    ///
+    /// Deliberately not a fixed enum of dev tools. Grouping is a property of the list, not of
+    /// software development: any rule that can name its output gets the same treatment, which
+    /// is what keeps the mechanism useful for the caches a photographer or a video editor
+    /// accumulates rather than only for build output.
+    public struct Family: Hashable, Sendable {
+        /// Identical keys are the same kind of thing. Two spellings of one idea share a key,
+        /// so `.venv` and `venv` collapse together rather than making two groups of one.
+        public let key: String
+        /// What to call several of them at once, without a count: "Python virtual environments".
+        public let plural: String
+        /// What the count is a count *of*: "projects", "places".
+        public let scope: String
+        /// Whether the members are folders scattered around the disk or loose items.
+        public let phrasing: Phrasing
+
+        public init(key: String, plural: String, scope: String, phrasing: Phrasing = .scattered) {
+            self.key = key
+            self.plural = plural
+            self.scope = scope
+            self.phrasing = phrasing
+        }
+
+        /// A family of folders reads by where they are; a family of files reads by how many
+        /// there are. "Large files you have not opened across 3 files" was the sentence that
+        /// made the distinction necessary.
+        public enum Phrasing: Sendable, Hashable {
+            /// "node_modules across 14 projects"
+            case scattered
+            /// "3 large files you have not opened"
+            case counted
+        }
+
+        /// How the group's row reads once there are several of them.
+        public func groupTitle(count: Int) -> String {
+            switch phrasing {
+            case .scattered: return "\(plural) across \(count) \(scope)"
+            case .counted: return "\(count) \(plural)"
+            }
+        }
+
+        public static let trash = Family(key: "trash", plural: "Trash", scope: "accounts")
+        public static let staleDownloads = Family(
+            key: "stale-downloads", plural: "downloads you have not opened in months",
+            scope: "files", phrasing: .counted)
+        public static let staleFiles = Family(
+            key: "stale-files", plural: "large files you have not opened in months",
+            scope: "files", phrasing: .counted)
+
+        /// The family for a directory of regenerable output, named after the directory itself
+        /// so the row says the word the user would recognise.
+        public static func directory(named name: String) -> Family {
+            if let known = knownDirectories[name] { return known }
+            return Family(key: name, plural: name, scope: "places")
+        }
+
+        private static let knownDirectories: [String: Family] = {
+            let venv = Family(
+                key: "virtualenv", plural: "Python virtual environments", scope: "projects")
+            let entries: [(String, Family)] = [
+                ("node_modules", Family(key: "node_modules", plural: "node_modules", scope: "projects")),
+                (".venv", venv),
+                ("venv", venv),
+                (".next", Family(key: ".next", plural: "Next.js build output", scope: "projects")),
+                (".nuxt", Family(key: ".nuxt", plural: "Nuxt build output", scope: "projects")),
+                (".build", Family(key: ".build", plural: "Swift build folders", scope: "projects")),
+                ("target", Family(key: "target", plural: "Rust and Maven build folders", scope: "projects")),
+                ("Pods", Family(key: "Pods", plural: "CocoaPods folders", scope: "projects")),
+                ("DerivedData", Family(key: "DerivedData", plural: "DerivedData folders", scope: "places")),
+                // "places", not "projects": a virtual environment alone can hold hundreds of
+                // __pycache__ directories, and calling those projects would be a lie about
+                // where the space went.
+                ("__pycache__", Family(key: "__pycache__", plural: "Python bytecode caches", scope: "places")),
+                (".pytest_cache", Family(key: ".pytest_cache", plural: "pytest caches", scope: "places")),
+                (".mypy_cache", Family(key: ".mypy_cache", plural: "mypy caches", scope: "places")),
+                (".tox", Family(key: ".tox", plural: "tox environments", scope: "places")),
+                (".gradle", Family(key: ".gradle", plural: "Gradle caches", scope: "places")),
+            ]
+            return Dictionary(uniqueKeysWithValues: entries)
+        }()
     }
 
     /// How a suggestion is carried out.
@@ -101,6 +193,8 @@ public struct Recommendation: Sendable, Identifiable {
 public struct RecommendationGroup: Sendable, Identifiable {
     public let tier: Recommendation.Tier
     public let items: [Recommendation]
+    /// What the list actually draws: single suggestions and collapsed families, largest first.
+    public let entries: [RecommendationEntry]
     public let totalSize: UInt64
 
     public var id: Int { tier.rawValue }
@@ -109,6 +203,44 @@ public struct RecommendationGroup: Sendable, Identifiable {
         self.tier = tier
         self.items = items
         self.totalSize = items.reduce(UInt64(0)) { $0 &+ $1.size }
+        self.entries = Self.entries(for: items, tier: tier)
+    }
+
+    /// How many of one kind it takes before they collapse into a single row.
+    ///
+    /// Three, not two. A group costs a click to open, so replacing two rows with one row that
+    /// hides two is not a saving; by three it is, and by fifteen it is the difference between
+    /// a list you can read and the one this replaced.
+    public static let clusterThreshold = 3
+
+    private static func entries(
+        for items: [Recommendation], tier: Recommendation.Tier
+    ) -> [RecommendationEntry] {
+        var byFamily: [Recommendation.Family: [Recommendation]] = [:]
+        var order: [Recommendation.Family] = []
+        for item in items {
+            if byFamily[item.family] == nil { order.append(item.family) }
+            byFamily[item.family, default: []].append(item)
+        }
+
+        var entries: [RecommendationEntry] = []
+        for family in order {
+            let members = byFamily[family] ?? []
+            // Only reversible suggestions collapse. Acting on a group acts on every member at
+            // once, and offering that for the one action with no undo behind it would be a
+            // bulk permanent delete a single click away.
+            let clusterable = members.allSatisfy { $0.action == .moveToTrash }
+            guard members.count >= clusterThreshold, clusterable else {
+                entries.append(contentsOf: members.map { .single($0) })
+                continue
+            }
+            entries.append(
+                .cluster(
+                    RecommendationCluster(
+                        tier: tier, family: family,
+                        items: members.sorted { $0.size > $1.size })))
+        }
+        return entries.sorted { $0.size > $1.size }
     }
 
     public static func group(_ recommendations: [Recommendation]) -> [RecommendationGroup] {
@@ -117,6 +249,74 @@ public struct RecommendationGroup: Sendable, Identifiable {
             buckets[item.tier, default: []].append(item)
         }
         return buckets.keys.sorted().map { RecommendationGroup(tier: $0, items: buckets[$0] ?? []) }
+    }
+}
+
+/// One row of the recommendations list: either a suggestion on its own, or a family of them
+/// collapsed behind a single row that can be expanded.
+public enum RecommendationEntry: Sendable, Identifiable {
+    case single(Recommendation)
+    case cluster(RecommendationCluster)
+
+    public var id: String {
+        switch self {
+        case .single(let item): return item.id.uuidString
+        case .cluster(let cluster): return cluster.id
+        }
+    }
+
+    /// What the row is sorted by, so a family of fifteen small folders can outrank a single
+    /// large one when their total says it should.
+    public var size: UInt64 {
+        switch self {
+        case .single(let item): return item.size
+        case .cluster(let cluster): return cluster.totalSize
+        }
+    }
+}
+
+/// Several suggestions of one kind, shown as one row.
+public struct RecommendationCluster: Sendable, Identifiable {
+    public let tier: Recommendation.Tier
+    public let family: Recommendation.Family
+    /// Largest first, which is also the order the expanded rows appear in.
+    public let items: [Recommendation]
+    public let totalSize: UInt64
+
+    /// Stable across rebuilds of the list, so an expanded group stays expanded when the tree
+    /// changes underneath it. Deliberately not the members' ids, which are fresh UUIDs on
+    /// every analysis pass.
+    public var id: String { "\(tier.rawValue):\(family.key)" }
+
+    public var title: String { family.groupTitle(count: items.count) }
+    /// Every member of a family carries the same rationale, so the first one speaks for all.
+    public var detail: String { items.first?.detail ?? "" }
+    public var symbolName: String { items.first?.symbolName ?? "folder.fill" }
+
+    /// The largest member, named. It is the one worth looking at first, and it tells the user
+    /// what sort of place these were found in without expanding the group.
+    public var largest: Recommendation? { items.first }
+
+    /// What to call the largest member on the group's second line.
+    ///
+    /// For folders that is the project containing it, not the suggestion's own title: those
+    /// titles already read "node_modules in meta-automation", so using one here produced
+    /// "largest 552.1 MB in node_modules in meta-automation". For loose files it is the file.
+    public var largestLabel: String? {
+        guard let largest else { return nil }
+        switch family.phrasing {
+        case .scattered: return (largest.displayPath as NSString).lastPathComponent
+        case .counted: return largest.title
+        }
+    }
+
+    public init(
+        tier: Recommendation.Tier, family: Recommendation.Family, items: [Recommendation]
+    ) {
+        self.tier = tier
+        self.family = family
+        self.items = items
+        self.totalSize = items.reduce(UInt64(0)) { $0 &+ $1.size }
     }
 }
 
@@ -228,7 +428,7 @@ public enum RecommendationEngine {
                 detail: "\(node.fileCount.formatted()) items already marked for deletion. "
                     + "Emptying is permanent.",
                 path: path, size: node.size, tier: .safe, symbolName: "trash.fill",
-                action: .emptyTrash)
+                family: .trash, action: .emptyTrash)
         }
 
         if let name = components.last, regenerableDirectories.contains(name) {
@@ -236,7 +436,8 @@ public enum RecommendationEngine {
             return Recommendation(
                 title: "\(name) in \(project)",
                 detail: "Build artefacts — your toolchain will regenerate these on next build.",
-                path: path, size: node.size, tier: .safe, symbolName: "hammer.fill")
+                path: path, size: node.size, tier: .safe, symbolName: "hammer.fill",
+                family: .directory(named: name))
         }
 
         // Xcode's caches are the single largest reclaimable directory on most dev machines.
@@ -251,7 +452,9 @@ public enum RecommendationEngine {
             return Recommendation(
                 title: "Xcode \(components.last ?? "data")",
                 detail: "Derived data and archives are rebuilt on demand.",
-                path: path, size: node.size, tier: .safe, symbolName: "wrench.and.screwdriver.fill")
+                path: path, size: node.size, tier: .safe,
+                symbolName: "wrench.and.screwdriver.fill",
+                family: .directory(named: components.last ?? "Xcode"))
         }
 
         return nil
@@ -295,6 +498,7 @@ public enum RecommendationEngine {
                 ? "Downloaded file, not opened in about \(months) months."
                 : "Large file, not opened in about \(months) months.",
             path: path, size: node.size, tier: .review,
-            symbolName: isDownload ? "arrow.down.circle.fill" : "doc.fill")
+            symbolName: isDownload ? "arrow.down.circle.fill" : "doc.fill",
+            family: isDownload ? .staleDownloads : .staleFiles)
     }
 }

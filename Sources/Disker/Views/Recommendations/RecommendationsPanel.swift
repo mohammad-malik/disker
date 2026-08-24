@@ -15,6 +15,14 @@ import SwiftUI
 struct RecommendationsPanel: View {
     @Bindable var model: AppModel
 
+    /// Which collapsed families are open.
+    ///
+    /// Held here rather than in each row so it survives scrolling — `List` throws rows away
+    /// as they leave the screen, and per-row `@State` went with them, collapsing groups the
+    /// user had just opened. Keyed on the cluster's stable id, not on its members, whose ids
+    /// are fresh on every analysis pass.
+    @State private var expanded: Set<String> = []
+
     var body: some View {
         Group {
             if model.recommendations.isEmpty {
@@ -35,8 +43,21 @@ struct RecommendationsPanel: View {
         List {
             ForEach(model.recommendationGroups) { group in
                 Section {
-                    ForEach(group.items) { item in
-                        RecommendationRow(item: item, model: model)
+                    ForEach(group.entries) { entry in
+                        switch entry {
+                        case .single(let item):
+                            RecommendationRow(item: item, model: model)
+                        case .cluster(let cluster):
+                            ClusterRow(
+                                cluster: cluster, model: model,
+                                isExpanded: expanded.contains(cluster.id),
+                                toggle: { toggle(cluster.id) })
+                            if expanded.contains(cluster.id) {
+                                ForEach(cluster.items) { item in
+                                    RecommendationRow(item: item, model: model, nested: true)
+                                }
+                            }
+                        }
                     }
                 } header: {
                     HStack {
@@ -59,14 +80,96 @@ struct RecommendationsPanel: View {
         // that scroll beneath one.
         .scrollEdgeEffectStyle(.hard, for: .top)
     }
+
+    private func toggle(_ id: String) {
+        if expanded.contains(id) {
+            expanded.remove(id)
+        } else {
+            expanded.insert(id)
+        }
+    }
+}
+
+/// One collapsed family: what it is, how many, and what they come to together.
+private struct ClusterRow: View {
+    let cluster: RecommendationCluster
+    @Bindable var model: AppModel
+    let isExpanded: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                .frame(width: 10)
+
+            Image(systemName: cluster.symbolName)
+                .foregroundStyle(.green)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(cluster.title)
+                    .font(.callout.weight(.medium))
+                    .lineLimit(1)
+                // Names the biggest one rather than repeating the count. It is the member
+                // worth looking at first, and it says what sort of place these came from
+                // without opening the group.
+                if let largest = cluster.largest, let label = cluster.largestLabel {
+                    Text("largest \(largest.size.formattedBytes) in \(label)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+            .help(cluster.detail)
+
+            Spacer(minLength: 8)
+
+            Text(cluster.totalSize.formattedBytes)
+                .font(.callout.weight(.medium))
+                .monospacedDigit()
+
+            Button {
+                model.requestTrashing(of: cluster)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Move all \(cluster.items.count) to Trash — undo with ⌘Z")
+            .accessibilityLabel("Move all \(cluster.items.count) to Trash")
+        }
+        .padding(.vertical, 3)
+        .contentShape(.rect)
+        .onTapGesture(perform: toggle)
+        .contextMenu {
+            Button(isExpanded ? "Collapse" : "Expand", action: toggle)
+            Divider()
+            Button("Move All \(cluster.items.count) to Trash", role: .destructive) {
+                model.requestTrashing(of: cluster)
+            }
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(cluster.title), \(cluster.totalSize.formattedBytes). \(cluster.detail)")
+        .accessibilityHint(isExpanded ? "Expanded" : "Collapsed. Click to see each one.")
+    }
 }
 
 private struct RecommendationRow: View {
     let item: Recommendation
     @Bindable var model: AppModel
+    /// Set when the row is a member of an expanded family, which indents it under its group.
+    var nested = false
 
     var body: some View {
         HStack(spacing: 10) {
+            if nested {
+                // Lines the member up under its group's icon rather than its chevron.
+                Spacer().frame(width: 20)
+            }
             Image(systemName: item.symbolName)
                 .foregroundStyle(tint)
                 .frame(width: 20)

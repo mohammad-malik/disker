@@ -75,6 +75,24 @@ struct ContentView: View {
                         + "It goes to the Trash, so you can put it back with ⌘Z or from Finder.")
             }
         }
+        // Reversible, unlike the empty below, so the wording leans on that: the reason to stop
+        // and ask is the number of folders going at once, not the risk of losing them.
+        .confirmationDialog(
+            "Move these to the Trash?",
+            isPresented: .init(
+                get: { model.pendingClusterTrash != nil },
+                set: { if !$0 { model.pendingClusterTrash = nil } })
+        ) {
+            Button("Move to Trash", role: .destructive) { model.confirmClusterTrash() }
+            Button("Cancel", role: .cancel) { model.pendingClusterTrash = nil }
+        } message: {
+            if let pending = model.pendingClusterTrash {
+                Text(
+                    "\(pending.items.count) × \(pending.family.plural), "
+                        + "\(pending.totalSize.formattedBytes) in total.\n\n"
+                        + "\(pending.detail)\n\nThey go to the Trash, so ⌘Z puts them all back.")
+            }
+        }
         // Separate from the dialog above because the promise is the opposite one. Everything
         // else in Disker goes to the Trash and comes back with ⌘Z; this is the one action
         // that cannot, so it says so instead of borrowing the reassuring wording.

@@ -301,6 +301,76 @@ final class AppModel {
     /// The "Empty the Trash" suggestion waiting on its confirmation.
     var pendingTrashEmpty: Recommendation?
 
+    /// A collapsed family waiting on its confirmation.
+    var pendingClusterTrash: RecommendationCluster?
+
+    /// Asks before moving a whole family to the Trash.
+    ///
+    /// Single rows act on the click, because one folder is easy to put back and ⌘Z is right
+    /// there. A group is a dozen folders and several gigabytes in one gesture, which is worth
+    /// a sentence naming what is about to happen even though it is just as reversible.
+    func requestTrashing(of cluster: RecommendationCluster) {
+        pendingClusterTrash = cluster
+    }
+
+    /// Moves every member of a family to the Trash, as one undoable step.
+    ///
+    /// One `moveToTrash` call and one undo registration, not one per member: fifteen entries
+    /// on the undo stack would mean fifteen ⌘Z presses to reverse what took a single click,
+    /// and a half-undone group is a state nobody asked for.
+    func confirmClusterTrash() {
+        guard let cluster = pendingClusterTrash else { return }
+        pendingClusterTrash = nil
+
+        let (trashed, failures) = TrashService.moveToTrash(paths: cluster.items.map(\.path))
+        if let first = failures.first {
+            lastError =
+                trashed.isEmpty
+                ? first.localizedDescription
+                : "Moved \(trashed.count) of \(cluster.items.count). "
+                    + first.localizedDescription
+        }
+        guard !trashed.isEmpty else { return }
+
+        // Only the members that actually moved. A locked folder stays on disk, so it keeps its
+        // row and its place in the chart.
+        let moved = Set(trashed.map(\.originalPath))
+        let removed = cluster.items.filter { moved.contains($0.path) }
+        recommendations.removeAll { item in removed.contains { $0.id == item.id } }
+
+        // Same as a single deletion: edit what we already know now, re-walk behind it. The
+        // pass runs once for the whole group rather than once per member.
+        var detached: [(node: FileNode, components: [String])] = []
+        for item in removed {
+            guard let components = treeComponents(forAbsolute: item.path),
+                let node = removeFromTree(at: components)
+            else { continue }
+            detached.append((node, components))
+        }
+        reconcile()
+
+        undoManager.registerUndo(withTarget: self) { model in
+            let restoreFailures = TrashService.restore(trashed)
+            if let failure = restoreFailures.first {
+                model.lastError = failure.localizedDescription
+            }
+            model.recommendations.append(contentsOf: removed)
+            model.recommendations.sort {
+                $0.tier == $1.tier ? $0.size > $1.size : $0.tier < $1.tier
+            }
+            // Deepest first, so a parent that was itself detached is back before its child
+            // needs somewhere to land.
+            for entry in detached.sorted(by: { $0.components.count > $1.components.count }) {
+                model.insertIntoTree(entry.node, at: entry.components)
+            }
+            model.reconcile()
+        }
+        undoManager.setActionName(
+            removed.count == 1
+                ? "Move \(removed[0].title) to Trash"
+                : "Move \(removed.count) items to Trash")
+    }
+
     /// Deletes the contents of the Trash for good.
     ///
     /// No undo is registered, and deliberately so: there is nothing left to restore from, and

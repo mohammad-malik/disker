@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.7 — 2026-08-23
+
+### One row for many of the same thing
+
+- A real developer's disk turns up the same artefact over and over. This machine had 146
+  `node_modules`, 16 virtual environments and 677 `__pycache__` directories, one row each, and
+  the list ran past 1,300 entries. No single row was worth acting on, and everything that was
+  got buried under them.
+- Suggestions now carry a family, and three or more of a family collapse into one row: "146
+  node_modules across 146 projects, 3.13 GB". Click it to see every member, largest first,
+  each still actionable on its own. The same list is now about a dozen rows.
+- Groups sort by their total rather than by their largest member, so twelve 400 MB folders
+  outrank one 1 GB folder. That ordering is the whole point of grouping: it puts the figure
+  that matters at the top.
+- Acting on a group moves every member to the Trash in one step, and one ⌘Z brings them all
+  back. Fifteen separate undo entries would have meant fifteen presses to reverse one click.
+- Three is the threshold, not two. Opening a group costs a click, so collapsing two rows into
+  one that hides two saves nothing.
+- The Trash never joins a group. Acting on a group acts on every member at once, and emptying
+  is the one action with no undo behind it.
+- `.venv` and `venv` share a family, so four environments make one group instead of two groups
+  of one. Families are a property of the list rather than of software development, so the same
+  mechanism will carry the caches a photographer or a video editor accumulates once those rules
+  exist.
+
 ## v1.6 — 2026-08-23
 
 ### Emptying the Trash

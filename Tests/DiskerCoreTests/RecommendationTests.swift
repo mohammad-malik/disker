@@ -377,3 +377,173 @@ struct CategoryTotalsTests {
         #expect(totals.first?.size == 900)
     }
 }
+
+@Suite("Grouping the list")
+struct RecommendationGroupingTests {
+
+    private func file(_ name: String, _ size: UInt64, accessed: Date? = nil) -> FileNode {
+        FileNode(name: name, size: size, kind: .file, fileCount: 1, accessTime: accessed)
+    }
+
+    private func directory(_ name: String, _ children: [FileNode]) -> FileNode {
+        FileNode(
+            name: name, size: children.reduce(0) { $0 + $1.size }, kind: .directory,
+            children: children, fileCount: children.reduce(0) { $0 + $1.fileCount })
+    }
+
+    /// `count` projects, each holding one folder of `name` at `size`.
+    private func projects(_ name: String, count: Int, size: UInt64) -> [FileNode] {
+        (0..<count).map { index in
+            directory("project\(index)", [directory(name, [file("payload", size)])])
+        }
+    }
+
+    private func analyze(_ children: [FileNode]) -> [RecommendationGroup] {
+        let root = directory("root", [directory("Users", [directory("alex", children)])])
+        return RecommendationGroup.group(
+            RecommendationEngine.analyze(result: ScanResult(
+                root: root, rootPath: "/", duration: 0, inaccessibleCount: 0,
+                deduplicatedBytes: 0)))
+    }
+
+    private func clusters(_ groups: [RecommendationGroup]) -> [RecommendationCluster] {
+        groups.flatMap(\.entries).compactMap {
+            if case .cluster(let cluster) = $0 { return cluster }
+            return nil
+        }
+    }
+
+    @Test("Many of one kind collapse into a single row")
+    func manyCollapse() {
+        // The list this replaces put fifteen node_modules on fifteen rows, where no single row
+        // was worth acting on and everything else was buried under them.
+        let groups = analyze(projects("node_modules", count: 15, size: 100_000_000))
+        let found = clusters(groups)
+
+        #expect(found.count == 1)
+        #expect(found.first?.title == "node_modules across 15 projects")
+        #expect(found.first?.items.count == 15)
+        #expect(found.first?.totalSize == 1_500_000_000)
+    }
+
+    @Test("Two of a kind stay on their own rows")
+    func twoStaySeparate() {
+        // A group costs a click to open, so collapsing two rows into one that hides two is
+        // not a saving.
+        let groups = analyze(projects("node_modules", count: 2, size: 100_000_000))
+
+        #expect(clusters(groups).isEmpty)
+        #expect(groups.flatMap(\.entries).count == 2)
+    }
+
+    @Test("Two spellings of one idea group together")
+    func spellingsShareAFamily() {
+        // `.venv` and `venv` are the same thing, and separating them would make two groups of
+        // one out of a group of four.
+        var tree = projects(".venv", count: 2, size: 50_000_000)
+        tree += (0..<2).map { index in
+            directory("other\(index)", [directory("venv", [file("payload", 50_000_000)])])
+        }
+        let found = clusters(analyze(tree))
+
+        #expect(found.count == 1)
+        #expect(found.first?.title == "Python virtual environments across 4 projects")
+    }
+
+    @Test("Different kinds do not get mixed together")
+    func kindsStaySeparate() {
+        let tree = projects("node_modules", count: 3, size: 100_000_000)
+            + projects(".venv", count: 3, size: 40_000_000)
+        let found = clusters(analyze(tree)).sorted { $0.totalSize > $1.totalSize }
+
+        #expect(found.count == 2)
+        #expect(found.first?.family.key == "node_modules")
+        #expect(found.last?.family.key == "virtualenv")
+    }
+
+    @Test("A family of small folders can outrank one large folder")
+    func groupsSortByTheirTotal() {
+        // The point of grouping: twelve 400 MB folders matter more than one 1 GB folder, and
+        // the list has to say so.
+        let tree = projects("node_modules", count: 12, size: 400_000_000)
+            + [directory("solo", [directory("DerivedData", [file("payload", 1_000_000_000)])])]
+        let entries = analyze(tree).first { $0.tier == .safe }?.entries ?? []
+
+        guard case .cluster(let first) = entries.first else {
+            #expect(Bool(false), "the family should be the first row")
+            return
+        }
+        #expect(first.family.key == "node_modules")
+        #expect(first.totalSize > 1_000_000_000)
+    }
+
+    @Test("The Trash is never part of a group")
+    func trashNeverClusters() {
+        // Acting on a group acts on every member at once, and emptying is the one action with
+        // no undo behind it.
+        let root = directory("root", [
+            directory("Users", [
+                directory("alex", [directory(".Trash", [file("junk", 900_000_000)])]),
+                directory("sam", [directory(".Trash", [file("junk", 800_000_000)])]),
+                directory("kim", [directory(".Trash", [file("junk", 700_000_000)])]),
+            ])
+        ])
+        let groups = RecommendationGroup.group(
+            RecommendationEngine.analyze(result: ScanResult(
+                root: root, rootPath: "/", duration: 0, inaccessibleCount: 0,
+                deduplicatedBytes: 0)))
+
+        #expect(clusters(groups).isEmpty)
+        #expect(groups.flatMap(\.entries).count == 3)
+    }
+
+    @Test("Stale files group too, which is the case that is not about code")
+    func staleFilesCluster() {
+        let old = Date(timeIntervalSinceNow: -400 * 24 * 3600)
+        let downloads = directory(
+            "Downloads",
+            (0..<4).map { file("installer\($0).dmg", 2_000_000_000, accessed: old) })
+        let found = clusters(analyze([downloads]))
+
+        #expect(found.count == 1)
+        #expect(found.first?.family == .staleDownloads)
+        // Counted, not scattered: "Downloads you have not opened across 4 files" was the
+        // sentence that made the two phrasings necessary.
+        #expect(found.first?.title == "4 downloads you have not opened in months")
+        #expect(found.first?.largestLabel?.hasSuffix(".dmg") == true)
+    }
+
+    @Test("A group names the project holding its largest member, not the suggestion")
+    func largestLabelNamesThePlace() {
+        // Suggestion titles already read "node_modules in meta-automation", so using one here
+        // produced "largest 552.1 MB in node_modules in meta-automation".
+        let found = clusters(analyze(projects("node_modules", count: 3, size: 100_000_000)))
+
+        #expect(found.first?.largestLabel == "project0")
+        #expect(found.first?.largest?.title == "node_modules in project0")
+    }
+
+    @Test("A group's members are listed largest first")
+    func membersSortedBySize() {
+        let tree = (0..<4).map { index in
+            directory(
+                "project\(index)",
+                [directory("node_modules", [file("payload", UInt64(index + 1) * 100_000_000)])])
+        }
+        let members = clusters(analyze(tree)).first?.items ?? []
+
+        #expect(members.map(\.size) == [400_000_000, 300_000_000, 200_000_000, 100_000_000])
+    }
+
+    @Test("A group's id survives a fresh analysis pass")
+    func idIsStableAcrossPasses() {
+        // The expanded-group state is keyed on it, and every suggestion gets a fresh UUID each
+        // time the tree is analysed.
+        let tree = projects("node_modules", count: 3, size: 100_000_000)
+        let first = clusters(analyze(tree)).first
+        let second = clusters(analyze(tree)).first
+
+        #expect(first?.id == second?.id)
+        #expect(first?.items.first?.id != second?.items.first?.id)
+    }
+}
