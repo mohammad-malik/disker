@@ -37,6 +37,14 @@ struct ContentView: View {
         SplitShell(
             model: model,
             inspectorVisible: model.showsInspector && model.sectionSupportsInspector)
+        // The split view has to reach the top of the window for the macOS 27 sidebar to look
+        // like a macOS 27 sidebar. SwiftUI lays a representable out inside the window's safe
+        // area, which starts below the titlebar, so the columns began 52pt down and the
+        // sidebar read as a slab with a strip of window above it — where Finder, Settings and
+        // the App Store all run the sidebar to the top edge with the traffic lights on it.
+        // AppKit still insets the *contents* of each column, so nothing ends up under the
+        // toolbar. Empty on macOS 26, where the columns are inset panels by design.
+        .ignoresSafeArea(.container, edges: SystemLook.isFlushSidebar ? .top : [])
         .navigationTitle(model.volume?.name ?? "Disker")
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }

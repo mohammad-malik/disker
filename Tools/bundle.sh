@@ -10,7 +10,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 cd "$REPO_ROOT"
 
 CONFIGURATION="${1:-release}"
-BUILD_DIR=".build/arm64-apple-macosx/$CONFIGURATION"
+# Asked for, never assumed. SwiftPM's current build system puts products under
+# `.build/out/Products/<Config>`, not the `.build/arm64-apple-macosx/<config>` this used to
+# hardcode — and that old path still holds a binary from the last build that used it. Copying
+# it produced an app that launched, ran, and silently predated every change being tested.
+BUILD_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path "${TESTING_FLAGS[@]}" | tail -1)"
 APP_DIR="build/$APP_NAME.app"
 VERSION="${DISKER_VERSION:-1.0.0}"
 

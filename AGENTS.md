@@ -2,12 +2,31 @@
 
 ## Build and test
 
-Pass `--disable-sandbox` to both:
+Build and test through the scripts, passing `--disable-sandbox` to both:
 
 ```sh
-swift build --disable-sandbox
+./Tools/build.sh --disable-sandbox
 ./Tools/test.sh --disable-sandbox
 ```
+
+A bare `swift build` no longer works on macOS 27, which is why the build goes through a
+script now. Two separate gaps in the macOS 27 Command Line Tools, both handled by the
+flags `Tools/env.sh` supplies:
+
+- No `libSwiftUIMacros.dylib` ships anywhere on the system, so `@State` cannot expand and
+  every SwiftUI file fails with `plugin for module 'SwiftUIMacros' not found`. `env.sh`
+  sets `SDKROOT` to the macOS 26 SDK, which declares `State` as a plain property wrapper
+  rather than a macro and sidesteps the missing plugin. Export `SDKROOT` yourself to
+  override it. `DiskerCore`, `diskerctl` and the tests hold no SwiftUI and compile against
+  either SDK, so only the app target needs this.
+- swift-testing's `libTestingMacros.dylib` sits one directory below the plugins the
+  compiler loads on its own, so `@Test` and `@Suite` fail to expand until `-plugin-path`
+  names it.
+
+One consequence worth knowing before writing a version check: an app built against the
+macOS 26 SDK does not see `#available(macOS 27, *)` as true when running on 27. Ask
+`ProcessInfo.processInfo.isOperatingSystemAtLeast` instead — `SplitShell` does, for the
+titlebar workaround described in its own comments.
 
 SwiftPM sandboxes its own manifest evaluation with `sandbox-exec`, and macOS will not
 nest seatbelt sandboxes. Inside an agent sandbox that means `Package.swift` cannot be
@@ -28,8 +47,23 @@ Tools only. That means no previews, no simulator, and no `xcodebuild`.
 ## Running the app
 
 ```sh
-./Tools/bundle.sh && open build/Disker.app
+SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk ./Tools/bundle.sh
+open build/Disker.app
 ```
+
+To see a change on screen, capture the window rather than the screen. The window is often
+on another Space, where a full-screen `screencapture` catches everything except the app.
+Read the window id out of the running process and target it:
+
+```sh
+lldb -p $(pgrep -x Disker) --batch -o 'expr -l objc++ -O -i1 -- NSWindow *w=(NSWindow*)[[(id)NSApp windows] objectAtIndex:0]; (id)@(w.windowNumber)' -o detach -o quit
+screencapture -x -o -l <windowNumber> shot.png
+```
+
+The same `lldb` route is the quickest way to test an AppKit hypothesis: poke the property
+on the live window or split view item, capture, and only then write the code. Re-run the
+unmodified control before believing a result, since an inactive window and a `setHidden:`
+that has not been laid out yet both read as a fix that is not there.
 
 `swift build` produces a bare executable. The app needs the bundle layout, icons and
 signature that `bundle.sh` applies, and the signing identity is what preserves Full Disk

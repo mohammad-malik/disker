@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.8 — 2026-09-20
+
+### macOS 27
+
+- A blurred band ran across the top of the chart, from the sidebar to the far edge of the
+  window, with the breadcrumb and the legend smeared into it. That band is a toolbar's scroll
+  edge effect, the blur macOS lays over whatever scrolls beneath it. macOS 26 only drew one
+  where something actually scrolled, so the chart never had one; 27 draws it over the column
+  whether or not there is a scroll view to attach it to. The window now turns it off for the
+  column holding the chart, and the breadcrumb and legend are legible again.
+- The sidebar and the inspector now run the full height of the window, flush to its edges,
+  with the traffic lights sitting on the sidebar. That is what Finder, System Settings and the
+  App Store do on macOS 27. They used to be inset panels floating over the content, rounded on
+  all four corners, which is what macOS 26 drew and still draws.
+- The 8pt gap that used to hold the inspector clear of the window edge is gone on 27. It
+  existed to balance an inset the system applied to one side of a floating panel, and beside a
+  flush column it read as a strip of bare window.
+- Running on macOS 26 is unchanged. Every one of these is chosen at launch from the version
+  actually running, so the two look the way their own version intends.
+
+### Superseded versions, and a few things inside bundles
+
+- Some folders are only dead once you look at their siblings. A browser extension unpacked
+  into `13.38.2.0_0` means nothing on its own; it means something next to `13.39.0.0_0`, where
+  only the highest version is ever loaded. Suggestions can now read a whole set of siblings and
+  offer the ones that have been superseded, keeping the newest.
+- This covers Chromium extension versions, per-version Gradle caches, superseded app builds,
+  older Android build-tools and platforms, and Arc's snapshots beyond the newest three.
+- Two rules keep it honest. A set of one yields nothing, so the only copy of anything is never
+  offered. And a single sibling that cannot be parsed silences the whole set rather than
+  letting a guess through.
+- Version components compare as numbers rather than as text, so `10` sorts above `9`, and
+  Android platforms order by API level rather than by the name of their directory.
+- A parent folder named `Extensions` is no longer enough on its own. The rule now wants the
+  whole Chromium profile shape around it, because `~/project/Extensions/widget/{1.0,2.0}` is
+  somebody's own versioned folder and the old reading offered `1.0` as safe to delete.
+- Disker can now see inside a bundle, in exactly one place and only for names written down in
+  advance: Logic's freeze files, and the render files a Final Cut library accumulates, which
+  run to hundreds of gigabytes. Nothing else inside any bundle is reachable by any rule, and a
+  test pins that. Re-rendering is the cost of being wrong here, so these are offered for review
+  rather than as safe.
+
 ## v1.7 — 2026-08-23
 
 ### One row for many of the same thing

@@ -2,6 +2,22 @@ import AppKit
 import DiskerCore
 import SwiftUI
 
+/// Which version's window chrome to build.
+///
+/// macOS 26 and 27 disagree about what a sidebar is. On 26 it is an inset panel floating over
+/// the content, rounded on all four corners and held clear of the window edges. On 27 it is
+/// flush: square, hard against the edges, running the full height of the window with the
+/// traffic lights on it, the way System Settings and Finder draw it. The window is built for
+/// whichever one is running rather than picking a side, so 26 keeps the look it shipped with.
+///
+/// Asked at runtime rather than with `#available`, because the app builds against the macOS 26
+/// SDK — the newest the Command Line Tools ship that can compile SwiftUI at all — and
+/// `#available(macOS 27, *)` does not come out true against an SDK that has never heard of 27.
+enum SystemLook {
+    static let isFlushSidebar = ProcessInfo.processInfo.isOperatingSystemAtLeast(
+        OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0))
+}
+
 /// The window's split view, in AppKit rather than SwiftUI.
 ///
 /// `NavigationSplitView` paints opaque column backgrounds, and SwiftUI offers no way to opt
@@ -54,11 +70,19 @@ struct SplitShell: NSViewControllerRepresentable {
         sidebarItem.minimumThickness = 260
         sidebarItem.maximumThickness = 320
         sidebarItem.canCollapse = true
-        // A full-height sidebar splits the titlebar into two regions, so leading toolbar
-        // items are laid out after the sidebar and slide sideways every time it collapses.
-        // Keeping the sidebar below the titlebar leaves one continuous region, which pins
-        // those items next to the traffic lights.
-        sidebarItem.allowsFullHeightLayout = false
+        // Full height on macOS 27, below the titlebar on 26.
+        //
+        // The two versions want opposite things here. On 26 a sidebar item renders as an inset
+        // panel floating over the content, and a full-height one splits the titlebar into two
+        // regions — which lays the leading toolbar items out after the sidebar so they slide
+        // sideways every time it collapses. Staying below the titlebar avoided that.
+        //
+        // macOS 27 dropped the floating panel: sidebars are flush, and they run the whole
+        // height of the window with the traffic lights sitting on them, as System Settings and
+        // Finder do. Held below the titlebar there, the column reads as a slab that starts in
+        // the wrong place. The separator goes back to automatic to get the hairline the system
+        // draws down the flush edge.
+        sidebarItem.allowsFullHeightLayout = SystemLook.isFlushSidebar
         sidebarItem.titlebarSeparatorStyle = .none
 
         let detailHost = NSHostingController(rootView: DetailView(model: model))
@@ -88,10 +112,9 @@ struct SplitShell: NSViewControllerRepresentable {
         inspectorItem.minimumThickness = 260
         inspectorItem.maximumThickness = 400
         inspectorItem.canCollapse = true
-        // Same reasoning as the leading sidebar: a full-height column would split the titlebar
-        // into separate regions and shift the toolbar items every time it collapses.
-        inspectorItem.allowsFullHeightLayout = false
-        inspectorItem.titlebarSeparatorStyle = .none
+        // Mirrors the leading sidebar on both versions, for the same reasons.
+        inspectorItem.allowsFullHeightLayout = SystemLook.isFlushSidebar
+        inspectorItem.titlebarSeparatorStyle = SystemLook.isFlushSidebar ? .automatic : .none
         inspectorItem.isCollapsed = !inspectorVisible
 
         // Empty, fixed-width, and transparent: purely the gap described on `panelEdgeInset`.
@@ -99,8 +122,12 @@ struct SplitShell: NSViewControllerRepresentable {
         // otherwise leave a bare strip of window between the chart and the window edge.
         let spacerItem = NSSplitViewItem(viewController: NSViewController())
         spacerItem.viewController.view = NSView()
-        spacerItem.minimumThickness = Self.panelEdgeInset
-        spacerItem.maximumThickness = Self.panelEdgeInset
+        // Zero on macOS 27. The gap balanced a panel the system inset from the window on one
+        // side only, and a flush inspector reaches the window edge on purpose — a strip of bare
+        // window beyond it would read as a rendering fault. The item stays in the split view at
+        // no width rather than being dropped, so the column indices below keep their meaning.
+        spacerItem.minimumThickness = SystemLook.isFlushSidebar ? 0 : Self.panelEdgeInset
+        spacerItem.maximumThickness = SystemLook.isFlushSidebar ? 0 : Self.panelEdgeInset
         spacerItem.canCollapse = true
         spacerItem.titlebarSeparatorStyle = .none
         // High, not required. A fixed-thickness item is already pinned by its equal minimum
@@ -174,9 +201,17 @@ struct SplitShell: NSViewControllerRepresentable {
     private static let panelEdgeInset: CGFloat = 8
 
     /// Wraps a hosted view in behind-window vibrancy that honours Reduce Transparency.
+    ///
+    /// Only on macOS 26. Apple's guidance is to keep hand-placed `NSVisualEffectView`s out of
+    /// sidebar hierarchies because they block the system's own material, and on 27 that is
+    /// exactly what happens: the system draws a flush sidebar whose material runs the full
+    /// height of the window, under the traffic lights, and a view of ours pinned to the split
+    /// item's bounds covers it. On 26 the item supplies no behind-window vibrancy of its own,
+    /// which is why this exists at all.
     private func vibrant(
         _ child: NSViewController, material: NSVisualEffectView.Material
     ) -> NSViewController {
+        guard !SystemLook.isFlushSidebar else { return child }
         let container = NSViewController()
         container.view = SidebarBackdrop(content: child.view, material: material)
         container.addChild(child)
@@ -201,6 +236,38 @@ final class InspectorAwareSplitViewController: NSSplitViewController {
     var isApplyingCollapse = false
 
     private var lastKnownCollapse: Bool?
+
+    /// Suppresses the scroll edge effect macOS 27 lays over the chart.
+    ///
+    /// A toolbar's scroll edge effect is the blur it draws over whatever scrolls beneath it.
+    /// AppKit installs one per titlebar region, and a region whose items bring their own — the
+    /// sidebar, whose list is a scroll view — gets a zero-sized one that draws nothing. The
+    /// region holding the chart has no scroll view to hand it to, so on macOS 27 it gets a
+    /// full-size one instead: a 52pt band across the top of the pane that blurs the breadcrumb
+    /// and the legend sitting in it into an unreadable ghost. On 26 that region's effect was
+    /// empty, which is why the band is new.
+    ///
+    /// A transparent titlebar is what stops it being drawn. Nothing else does: SwiftUI's
+    /// `scrollEdgeEffectHidden` has no effect applied from inside the hosted view, at the
+    /// chart or at the root, because the effect belongs to AppKit's titlebar rather than to
+    /// the hosting view; and `titlebarSeparatorStyle` of `.none` on the item, on the window,
+    /// or on both leaves the band exactly as it was.
+    ///
+    /// Nothing is lost by it here. The window is opaque and the split view starts below the
+    /// titlebar, so a transparent titlebar has no content underneath to reveal and the toolbar
+    /// keeps its own material. It is still gated to 27: on 26 there is no band to remove, and
+    /// the safest change to that version's appearance is none at all.
+    ///
+    /// Re-asserted on every layout rather than set once. SwiftUI configures the window it
+    /// hosts this controller in, and does so *after* `viewWillAppear` — set there, the flag is
+    /// silently overwritten and the band comes back.
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        guard SystemLook.isFlushSidebar, let window = view.window,
+            !window.titlebarAppearsTransparent
+        else { return }
+        window.titlebarAppearsTransparent = true
+    }
 
     override func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)
