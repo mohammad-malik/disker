@@ -190,3 +190,186 @@ struct RecommendationSafetyTests {
         #expect(found.first?.title.contains("node_modules") == true)
     }
 }
+
+@Suite("Protected user data")
+struct ProtectedUserDataTests {
+
+    private let home = "/Users/tester"
+
+    private func file(_ name: String, _ size: UInt64, accessed: Date? = nil) -> FileNode {
+        FileNode(name: name, size: size, kind: .file, fileCount: 1, accessTime: accessed)
+    }
+
+    private func directory(_ name: String, _ children: [FileNode]) -> FileNode {
+        FileNode(
+            name: name, size: children.reduce(0) { $0 + $1.size }, kind: .directory,
+            children: children, fileCount: children.reduce(0) { $0 + $1.fileCount })
+    }
+
+    /// Every protected path, dressed up as bait: large, long untouched, and where the name
+    /// allows, carrying something a rule already matches.
+    private var baitedTree: FileNode {
+        let old = Date(timeIntervalSinceNow: -400 * 24 * 3600)
+        return directory("root", [
+            directory("Users", [
+                directory("tester", [
+                    directory(".codex", [
+                        directory("sessions", [file("transcript.jsonl", 4_000_000_000, accessed: old)]),
+                        file("history.jsonl", 2_000_000_000, accessed: old),
+                    ]),
+                    directory(".claude", [
+                        directory("projects", [file("history.jsonl", 3_000_000_000, accessed: old)])
+                    ]),
+                    directory(".aws", [file("credentials", 2_000_000_000, accessed: old)]),
+                    directory(".gradle", [
+                        file("gradle.properties", 1_500_000_000, accessed: old),
+                        // The caches beside the signing keys are a rule we actively want.
+                        directory("caches", [file("blob", 2_000_000_000, accessed: old)]),
+                    ]),
+                    directory("Library", [
+                        directory("Mobile Documents", [
+                            // Named so the build-artefact rule would match it.
+                            directory("node_modules", [file("payload", 5_000_000_000)])
+                        ]),
+                        directory("CloudStorage", [
+                            directory(".venv", [file("payload", 4_000_000_000)])
+                        ]),
+                    ]),
+                    directory("Dropbox", [file("archive.zip", 6_000_000_000, accessed: old)]),
+                    directory("Parallels", [file("Windows.pvm.bin", 60_000_000_000, accessed: old)]),
+                    // Not protected, and the control for the assertion below: it proves the
+                    // engine is producing suggestions for this tree at all.
+                    directory("project", [
+                        directory("node_modules", [file("dep.js", 900_000_000)])
+                    ]),
+                ])
+            ])
+        ])
+    }
+
+    private func analyze(_ root: FileNode) -> [Recommendation] {
+        RecommendationEngine.analyze(
+            result: ScanResult(
+                root: root, rootPath: "/", duration: 0, inaccessibleCount: 0,
+                deduplicatedBytes: 0),
+            policy: SafetyPolicy(home: home))
+    }
+
+    @Test("Nothing protected is ever suggested, whatever the rule")
+    func nothingProtectedIsOffered() {
+        // One assertion over the whole engine rather than per rule, so it keeps holding for
+        // rules that do not exist yet.
+        let protectedPrefixes = [
+            "/Users/tester/.codex/sessions", "/Users/tester/.codex/history.jsonl",
+            "/Users/tester/.claude/projects", "/Users/tester/.aws",
+            "/Users/tester/.gradle/gradle.properties",
+            "/Users/tester/Library/Mobile Documents", "/Users/tester/Library/CloudStorage",
+            "/Users/tester/Dropbox", "/Users/tester/Parallels",
+        ]
+        let offered = analyze(baitedTree).map(\.path)
+
+        for path in offered {
+            for prefix in protectedPrefixes {
+                #expect(
+                    path != prefix && !path.hasPrefix(prefix + "/"),
+                    "suggested \(path), which is protected by \(prefix)")
+            }
+        }
+
+        // Control, so the assertion above cannot pass by finding nothing at all. The bait
+        // includes one unprotected artefact, and it has to come out.
+        //
+        // Pointing the policy at a different home no longer works as a control, which is the
+        // point of the change that broke it: the built-ins now cover every account under
+        // /Users rather than only the one running the app.
+        #expect(offered.contains { $0.hasSuffix("/project/node_modules") })
+    }
+
+    @Test("Protecting the credentials does not protect the caches beside them")
+    func theDenyListDoesNotEatTheApp() {
+        // A deny-list that quietly swallows the app's value would pass the test above while
+        // making Disker useless.
+        let old = Date(timeIntervalSinceNow: -400 * 24 * 3600)
+        let tree = directory("root", [
+            directory("Users", [
+                directory("tester", [
+                    directory("project", [
+                        directory("node_modules", [file("dep.js", 900_000_000, accessed: old)])
+                    ])
+                ])
+            ])
+        ])
+
+        #expect(analyze(tree).contains { $0.path.hasSuffix("/project/node_modules") })
+    }
+
+    @Test("Loading a whitelist for another home protects that home")
+    func whitelistLoadingKeepsTheRequestedHome() {
+        // Both return paths dropped the supplied home, so the built-ins expanded against the
+        // process user's home instead and the requested account was left unguarded.
+        let policy = SafetyPolicy.loadingMoleWhitelist(home: "/Users/elsewhere")
+
+        #expect(policy.isExcluded("/Users/elsewhere/.codex/sessions"))
+        #expect(policy.isExcluded("/Users/elsewhere/Library/Mobile Documents"))
+        #expect(!policy.isExcluded("/Users/elsewhere/Documents/project/node_modules"))
+    }
+
+    @Test("A directory above protected content is not offered, even through a wildcard")
+    func ancestorDetectionUnderstandsGlobs() {
+        // Comparing pattern text against the path only works while patterns are literal. A
+        // Mole entry with a wildcard in the middle never looked like a descendant, so the
+        // directory above it could be offered whole and take the protected content with it.
+        let policy = SafetyPolicy(
+            protectedPatterns: ["/Users/tester/projects/*/node_modules/secrets"], home: home)
+
+        #expect(policy.containsProtectedContent("/Users/tester/projects/app/node_modules"))
+        #expect(policy.containsProtectedContent("/Users/tester/projects/app"))
+        #expect(policy.containsProtectedContent("/Users/tester/projects"))
+        // A sibling that the pattern cannot reach stays offerable.
+        #expect(!policy.containsProtectedContent("/Users/tester/other/node_modules"))
+    }
+
+    @Test("Editor local history protects the directories above it")
+    func editorHistoryProtectsItsAncestors() {
+        // 165 MB of uncommitted-edit history on the machine this was written on, under three
+        // editors. The entry that was meant to cover them was `*/User/History`, which has no
+        // fixed root and so could never protect an ancestor.
+        let policy = SafetyPolicy(home: home)
+
+        #expect(policy.isExcluded("/Users/tester/Library/Application Support/Code/User/History"))
+        #expect(
+            policy.containsProtectedContent("/Users/tester/Library/Application Support/Code/User"))
+        #expect(policy.containsProtectedContent("/Users/tester/Library/Application Support/Cursor"))
+    }
+
+    @Test("Every account on the machine is protected, not just the one running Disker")
+    func otherAccountsAreProtected() {
+        // Disker scans the whole data volume, so a shared Mac has other people's home
+        // directories in the tree. Binding the built-ins to the running user's home left every
+        // other account's credentials and cloud roots offerable.
+        let policy = SafetyPolicy(home: home)
+
+        #expect(policy.isExcluded("/Users/somebody-else/.ssh"))
+        #expect(policy.isExcluded("/Users/somebody-else/Library/CloudStorage"))
+        #expect(policy.isExcluded("/Users/somebody-else/.codex/sessions"))
+        #expect(policy.containsProtectedContent("/Users/somebody-else/Library"))
+        // And the ordinary rules still work in that account.
+        #expect(!policy.isExcluded("/Users/somebody-else/project/node_modules"))
+    }
+
+    @Test("A file inside a directory holding protected content is not offered")
+    func filesGoThroughThePolicyToo() {
+        // The bypass this gate closed: the file branch appended straight to the results and
+        // consulted no policy, so only the walker stopping early ever protected anything.
+        let old = Date(timeIntervalSinceNow: -400 * 24 * 3600)
+        let tree = directory("root", [
+            directory("Users", [
+                directory("tester", [
+                    directory(".aws", [file("backup.tar", 3_000_000_000, accessed: old)])
+                ])
+            ])
+        ])
+
+        #expect(analyze(tree).isEmpty)
+    }
+}

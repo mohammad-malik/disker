@@ -362,6 +362,20 @@ public enum RecommendationEngine {
         var found: [Recommendation] = []
         let rootPath = result.rootPath
 
+        /// The only way onto `found`.
+        ///
+        /// Every rule routes through here, so the protections hold for rules nobody has
+        /// written yet. Before this existed the file branch appended straight to the array
+        /// and consulted no policy at all: a large stale file inside a directory that merely
+        /// *contains* protected content was offered, and files under an excluded directory
+        /// were spared only because traversal happened to stop above them. Protection by
+        /// accident is not protection.
+        func emit(_ recommendation: Recommendation) {
+            let path = recommendation.path
+            guard !policy.isExcluded(path), !policy.containsProtectedContent(path) else { return }
+            found.append(recommendation)
+        }
+
         func walk(_ node: FileNode, components: [String]) {
             let path = ([rootPath] + components).joined(separator: "/")
                 .replacingOccurrences(of: "//", with: "/")
@@ -370,7 +384,18 @@ public enum RecommendationEngine {
                 // Stop at bundle boundaries. Everything below belongs to an installed
                 // application, not to the user's projects, and removing any of it breaks
                 // the app rather than reclaiming build output.
-                if isBundle(node.name) { return }
+                //
+                // `bundleRules` is the single exception, and it is the only code in the app
+                // that ever sees inside a bundle. The `return` below it is load-bearing: the
+                // walk never recurses past this point, so `classifyDirectory`, the sibling
+                // hook, the stale-file rule and every rule written after this one remain
+                // structurally unable to reach a bundle's interior. Adding a rule cannot open
+                // that door by accident — it has to be typed into the switch inside
+                // `bundleRules`, which a test pins.
+                if isBundle(node.name) {
+                    bundleRules(node, path: path).forEach(emit)
+                    return
+                }
 
                 // Installed software and anything the user told Mole to protect. Descending
                 // is pointless too — nothing beneath a global install root is build output.
@@ -385,6 +410,23 @@ public enum RecommendationEngine {
                     return
                 }
 
+                // Rules that read a whole set of siblings and keep some of them. Runs before
+                // the single-node rules because it decides which children are still worth
+                // visiting: `claimed` names the ones it has spoken for, and the walk skips
+                // exactly those rather than stopping, since Arc's snapshots sit in a directory
+                // full of things the walker still has to see.
+                let siblings = classifySiblingSets(
+                    in: node, components: components, path: path, now: now)
+                if !siblings.matches.isEmpty {
+                    siblings.matches.forEach(emit)
+                }
+                if !siblings.claimed.isEmpty {
+                    for child in node.children where !siblings.claimed.contains(child.name) {
+                        walk(child, components: components + [child.name])
+                    }
+                    return
+                }
+
                 if var match = classifyDirectory(node, components: components, path: path, now: now) {
                     // Regenerable, but removing it breaks a working tool until it can
                     // re-download. That is not what "safe" should promise.
@@ -394,7 +436,7 @@ public enum RecommendationEngine {
                             detail: "Cache for an installed tool — it will re-download this, "
                                 + "but the tool stops working until it does.")
                     }
-                    found.append(match)
+                    emit(match)
                     // Do not descend: the directory is the actionable unit, and its contents
                     // would otherwise generate hundreds of redundant suggestions.
                     return
@@ -403,7 +445,7 @@ public enum RecommendationEngine {
                     walk(child, components: components + [child.name])
                 }
             } else if let match = classifyFile(node, path: path, components: components, now: now) {
-                found.append(match)
+                emit(match)
             }
         }
 
@@ -415,6 +457,361 @@ public enum RecommendationEngine {
         return found.sorted {
             $0.tier == $1.tier ? $0.size > $1.size : $0.tier < $1.tier
         }
+    }
+
+    /// The only rules permitted inside a bundle.
+    ///
+    /// Two editing applications keep enormous regenerable caches inside their document
+    /// packages, and refusing to look makes Disker useless to the users with the worst disk
+    /// problems: a Final Cut library's render files run to hundreds of gigabytes. The risk is
+    /// equally plain, because one directory over sits `Original Media`, which for a library
+    /// imported with copy is frequently the only copy of the footage that exists.
+    ///
+    /// So this matches exact names at a fixed depth and never recurses. There is no name list
+    /// shared with the generic rules, no fall-through, and no traversal: the only way for
+    /// anything else inside a bundle to be suggested is for somebody to type its name here.
+    ///
+    /// Both are `review` rather than `safe`. Regenerating them costs no data, which reads like
+    /// the definition of safe, but re-rendering a large library takes hours or days, and the
+    /// engine already demotes regenerable-but-disruptive elsewhere for exactly that reason.
+    /// Trashing files inside a library the app currently has open can also corrupt it, which
+    /// the detail says out loud since Disker cannot tell whether the app is running.
+    static func bundleRules(_ node: FileNode, path: String) -> [Recommendation] {
+        switch (node.name as NSString).pathExtension {
+        case "fcpbundle":
+            // Depth 2: each child of the library is an event, and the caches sit inside it.
+            return node.children.flatMap { event in
+                event.children.filter {
+                    $0.name == "Render Files" || $0.name == "Analysis Files"
+                }
+                .filter { $0.size > 0 }
+                .map { generated in
+                    Recommendation(
+                        title: "\(generated.name) in \(event.name)",
+                        detail: "Final Cut re-creates these on demand. Quit Final Cut first: "
+                            + "changing a library it has open can corrupt it.",
+                        path: path + "/" + event.name + "/" + generated.name,
+                        size: generated.size, tier: .review, symbolName: "film.stack",
+                        family: Recommendation.Family(
+                            key: "fcp-generated-media", plural: "Final Cut render files",
+                            scope: "events"))
+                }
+            }
+        case "logicx":
+            // Depth 1. Audio Files, Bounces and Project File Backups are siblings of this and
+            // none of them regenerate: recordings, finished mixes, and the recovery chain.
+            return node.children.filter { $0.name == "Freeze Files" && $0.size > 0 }
+                .map { freeze in
+                    Recommendation(
+                        title: "Freeze files in \(node.name)",
+                        detail: "Rendered frozen tracks. Logic rebuilds them only if the "
+                            + "plugins that made them are still installed.",
+                        path: path + "/" + freeze.name, size: freeze.size, tier: .review,
+                        symbolName: "snowflake",
+                        family: Recommendation.Family(
+                            key: "logic-freeze-files", plural: "Logic freeze files",
+                            scope: "projects"))
+                }
+        default:
+            return []
+        }
+    }
+
+    /// Rules that compare a directory's children against each other.
+    ///
+    /// `classifyDirectory` sees one node and answers yes or no about it. These rules cannot:
+    /// deciding that a browser extension's `13.38.2.0_0` is dead requires seeing that
+    /// `13.41.0.0_0` sits beside it. The hook returns the suggestions it wants plus the names
+    /// it has spoken for, and only ever suggests the members that are stale — never the whole
+    /// set with a note about what survives. If the rule emits four of six snapshots, then four
+    /// is what every count in the app means, which is the honest number.
+    ///
+    /// `VersionOrder.superseded` carries two invariants for the version-shaped rules: a set of
+    /// one yields nothing, so the only copy of something is never proposed, and one sibling
+    /// that fails to parse silences the whole set.
+    static func classifySiblingSets(
+        in node: FileNode, components: [String], path: String, now: Date
+    ) -> (matches: [Recommendation], claimed: Set<String>) {
+        if let match = chromiumExtensionVersions(in: node, components: components, path: path) {
+            return match
+        }
+        if let match = gradleVersionCaches(in: node, components: components, path: path) {
+            return match
+        }
+        if let match = androidBuildToolVersions(in: node, components: components, path: path) {
+            return match
+        }
+        if let match = appVersionDirectories(in: node, components: components, path: path) {
+            return match
+        }
+        if let match = arcSidebarSnapshots(in: node, components: components, path: path) {
+            return match
+        }
+        if let match = unityProject(in: node, path: path) { return match }
+        if let match = unrealProject(in: node, path: path) { return match }
+        return ([], [])
+    }
+
+    /// Chromium unpacks each extension into a version-named directory and is supposed to
+    /// remove the old one on update. It frequently does not, especially after a force-quit,
+    /// and only the highest version is ever loaded.
+    ///
+    /// Fires at the extension-id directory, and the anchor is the whole Chromium profile
+    /// shape: `<browser>/User Data/<Profile>/Extensions/<id>`. A parent named `Extensions` on
+    /// its own is not enough — `~/project/Extensions/widget/{1.0,2.0}` is somebody's own
+    /// versioned folder, and this rule would have offered `1.0` as safe to delete.
+    private static func chromiumExtensionVersions(
+        in node: FileNode, components: [String], path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        // …/User Data/<Profile>/Extensions/<extension id>
+        guard components.count >= 4,
+            components.suffix(4).first == "User Data",
+            components.dropLast().last == "Extensions",
+            let stale = VersionOrder.superseded(among: node.children.map(\.name))
+        else { return nil }
+
+        let staleNames = Set(stale)
+        let matches = node.children.filter { staleNames.contains($0.name) && $0.size > 0 }
+            .map { child in
+                Recommendation(
+                    title: "\(node.name) \(child.name)",
+                    detail: "An older copy of a browser extension. Only the newest version is "
+                        + "ever loaded, and that one stays.",
+                    path: path + "/" + child.name, size: child.size, tier: .safe,
+                    symbolName: "puzzlepiece.extension.fill",
+                    family: Recommendation.Family(
+                        key: "chromium-extension-versions",
+                        plural: "old browser extension versions", scope: "places"))
+            }
+        return matches.isEmpty ? nil : (matches, Set(node.children.map(\.name)))
+    }
+
+    /// Gradle keeps a separate cache tree per Gradle version, so upgrading one project's
+    /// wrapper leaves the previous version's multi-gigabyte directory untouched forever.
+    ///
+    /// Ordered by access time rather than by version number: the newest Gradle is not
+    /// necessarily the one still in use, and a build that ran yesterday against 8.13 is what
+    /// matters. An unknown access time keeps the directory, following the same rule the stale
+    /// file logic uses — `nil` means unknown, never old.
+    private static func gradleVersionCaches(
+        in node: FileNode, components: [String], path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        guard node.name == "caches", components.suffix(2).first == ".gradle" else { return nil }
+
+        let versions = node.children.filter { VersionOrder.parse($0.name) != nil }
+        guard versions.count >= 2 else { return nil }
+
+        // Whichever version was used most recently is the live one.
+        guard let newest = versions.compactMap(\.accessTime).max() else { return nil }
+        let stale = versions.filter { child in
+            guard let accessed = child.accessTime else { return false }
+            return accessed < newest
+        }
+        guard !stale.isEmpty else { return nil }
+
+        let matches = stale.map { child in
+            Recommendation(
+                title: "Gradle \(child.name)",
+                detail: "A cache for a Gradle version you have stopped building with. The next "
+                    + "build that needs it re-downloads its dependencies.",
+                path: path + "/" + child.name, size: child.size, tier: .safe,
+                symbolName: "shippingbox.fill",
+                family: Recommendation.Family(
+                    key: "gradle-version-caches", plural: "Gradle version caches",
+                    scope: "versions"))
+        }
+        return (matches, Set(versions.map(\.name)))
+    }
+
+    /// One directory per Android build-tools release or platform API level, added on every SDK
+    /// update and never pruned.
+    ///
+    /// The two shapes are named differently: build-tools directories are bare versions like
+    /// `36.0.0`, while platforms are `android-36`. The prefix is stripped before comparing,
+    /// and a name that does not fit its directory's shape silences the whole set — which is
+    /// what happens to a preview platform such as `android-TiramisuPrivacySandbox`, since
+    /// there is no sane place to order it against a number.
+    ///
+    /// Review rather than safe: a project's `build.gradle` can pin an exact version, and
+    /// nothing in a directory name says which versions are pinned.
+    private static func androidBuildToolVersions(
+        in node: FileNode, components: [String], path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        let isPlatforms = node.name == "platforms"
+        guard node.name == "build-tools" || isPlatforms,
+            components.dropLast().last == "sdk" || components.dropLast().last == "Sdk"
+        else { return nil }
+
+        // `android-36` orders as 36; anything else in a platforms directory does not order at
+        // all, and `superseded` turns one unparseable entry into silence for the set.
+        let prefix = "android-"
+        let versions: [String: String] = node.children.reduce(into: [:]) { table, child in
+            let version =
+                isPlatforms
+                ? (child.name.hasPrefix(prefix) ? String(child.name.dropFirst(prefix.count)) : child.name)
+                : child.name
+            table[child.name] = version
+        }
+
+        guard let stale = VersionOrder.superseded(among: Array(versions.values)) else {
+            return nil
+        }
+        let staleVersions = Set(stale)
+        let matches = node.children.filter { child in
+            guard let version = versions[child.name] else { return false }
+            return staleVersions.contains(version) && child.size > 0
+        }
+        .map { child in
+            Recommendation(
+                title: "Android \(node.name) \(child.name)",
+                detail: "An older Android SDK component. The SDK manager re-downloads it "
+                    + "if a project pins that version.",
+                path: path + "/" + child.name, size: child.size, tier: .review,
+                symbolName: "hammer.fill",
+                family: Recommendation.Family(
+                    key: "android-sdk-versions", plural: "old Android SDK versions",
+                    scope: "versions"))
+        }
+        return matches.isEmpty ? nil : (matches, Set(node.children.map(\.name)))
+    }
+
+    /// Self-updating apps that unpack each build into a version-named directory beside the
+    /// previous one, launch the newest, and never remove the old.
+    ///
+    /// Named apps only. The first version of this matched *any* directory under Application
+    /// Support whose children were all version-shaped, which is a shape rather than a layout:
+    /// versioned backups, per-release document stores and database directories look identical
+    /// from the outside, and nothing about the shape proves the app ignores the older ones.
+    /// Being right about Discord is not evidence about the next app that happens to store
+    /// `1.0` and `2.0` side by side.
+    ///
+    /// The bar for adding a name here is knowing that the app launches the newest build and
+    /// keeps the rest as dead weight.
+    private static let selfUpdatingAppDirectories: Set<String> = [
+        "discord", "discordcanary", "discordptb", "discorddevelopment",
+    ]
+
+    private static func appVersionDirectories(
+        in node: FileNode, components: [String], path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        guard components.dropLast().last == "Application Support",
+            selfUpdatingAppDirectories.contains(node.name.lowercased()),
+            node.children.count >= 2,
+            let stale = VersionOrder.superseded(among: node.children.map(\.name))
+        else { return nil }
+
+        let staleNames = Set(stale)
+        let matches = node.children.filter { staleNames.contains($0.name) && $0.size > 0 }
+            .map { child in
+                Recommendation(
+                    title: "\(node.name) \(child.name)",
+                    detail: "An older build of \(node.name). The app launches the newest one, "
+                        + "which stays where it is.",
+                    path: path + "/" + child.name, size: child.size, tier: .safe,
+                    symbolName: "app.badge.fill",
+                    family: Recommendation.Family(
+                        key: "stale-app-versions", plural: "old app versions", scope: "apps"))
+            }
+        return matches.isEmpty ? nil : (matches, Set(node.children.map(\.name)))
+    }
+
+    /// Arc snapshots its whole tab and space layout to a timestamped file on every significant
+    /// change and never prunes them. The live file is the one *without* a timestamp, which is
+    /// why this matches on the timestamp rather than on a `StorableSidebar*` glob.
+    ///
+    /// Keeps the newest few as a hedge: these are the only record of a space deleted months
+    /// ago, and recovering one means hand-editing JSON, so the cost of keeping three is a few
+    /// megabytes and the cost of keeping none is occasionally total.
+    private static func arcSidebarSnapshots(
+        in node: FileNode, components: [String], path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        guard node.name == "Arc", components.dropLast().last == "Application Support"
+        else { return nil }
+
+        let snapshots = node.children.filter {
+            $0.name.hasPrefix("StorableSidebar.") && $0.name.hasSuffix(".json")
+                && $0.name != "StorableSidebar.json"
+        }
+        // Timestamped names sort chronologically as text, which is what the format is for.
+        let stale = snapshots.sorted { $0.name > $1.name }.dropFirst(3)
+        guard stale.count >= 2 else { return nil }
+
+        let matches = stale.map { child in
+            Recommendation(
+                title: child.name,
+                detail: "A snapshot of your Arc sidebar. Arc writes a new one on every change "
+                    + "and reads none of them; the live sidebar and the three newest stay.",
+                path: path + "/" + child.name, size: child.size, tier: .safe,
+                symbolName: "clock.arrow.circlepath",
+                family: Recommendation.Family(
+                    key: "arc-sidebar-snapshots", plural: "old Arc sidebar snapshots",
+                    scope: "files", phrasing: .counted))
+        }
+        // Only the snapshots are spoken for; the rest of Arc's directory is still walked.
+        return (matches, Set(snapshots.map(\.name)))
+    }
+
+    /// Unity rebuilds `Library` entirely from `Assets` and `ProjectSettings`, so it is pure
+    /// derived data — and `Library` is also the name of the single most important directory in
+    /// a macOS home folder.
+    ///
+    /// The sibling test is what separates those two, and it is not optional: `Assets` *and*
+    /// `ProjectSettings` must both sit beside it. That signature belongs to Unity and to
+    /// nothing else, and `~/Library` has neither. Handled here rather than in
+    /// `classifyDirectory` because the evidence lives in the parent's other children.
+    private static func unityProject(
+        in node: FileNode, path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        let names = Set(node.children.map(\.name))
+        guard names.contains("Assets"), names.contains("ProjectSettings"),
+            let library = node.children.first(where: { $0.name == "Library" && $0.isDirectory }),
+            library.size > 0
+        else { return nil }
+
+        let match = Recommendation(
+            title: "Unity Library in \(node.name)",
+            detail: "Unity re-imports this from Assets when the project opens. Close the "
+                + "project first.",
+            path: path + "/Library", size: library.size, tier: .safe,
+            symbolName: "cube.transparent.fill",
+            family: Recommendation.Family(
+                key: "unity-library", plural: "Unity import caches", scope: "projects"))
+        // Claimed so the walk does not go inside and start suggesting its contents piecemeal.
+        return ([match], ["Library"])
+    }
+
+    /// Unreal's derived data and build intermediates rebuild from the project, and both names
+    /// are ordinary enough English that a bare name match would be wrong.
+    ///
+    /// Gated on a `.uproject` file sitting beside them. `Saved` is deliberately absent: most
+    /// cleanup guides on the internet lump it in with these two, but it holds autosaves and
+    /// crash recovery, which for someone whose editor died before they saved is the only copy
+    /// of their work.
+    private static func unrealProject(
+        in node: FileNode, path: String
+    ) -> (matches: [Recommendation], claimed: Set<String>)? {
+        guard node.children.contains(where: {
+            !$0.isDirectory && ($0.name as NSString).pathExtension == "uproject"
+        }) else { return nil }
+
+        let derived = node.children.filter {
+            $0.isDirectory && ($0.name == "DerivedDataCache" || $0.name == "Intermediate")
+                && $0.size > 0
+        }
+        guard !derived.isEmpty else { return nil }
+
+        let matches = derived.map { child in
+            Recommendation(
+                title: "\(child.name) in \(node.name)",
+                detail: "Compiled shaders and build intermediates Unreal re-derives when the "
+                    + "project opens. The first open afterwards is slow.",
+                path: path + "/" + child.name, size: child.size, tier: .safe,
+                symbolName: "cube.fill",
+                family: Recommendation.Family(
+                    key: "unreal-derived-data", plural: "Unreal derived data caches",
+                    scope: "projects"))
+        }
+        return (matches, Set(derived.map(\.name)))
     }
 
     private static func classifyDirectory(
@@ -429,6 +826,14 @@ public enum RecommendationEngine {
                     + "Emptying is permanent.",
                 path: path, size: node.size, tier: .safe, symbolName: "trash.fill",
                 family: .trash, action: .emptyTrash)
+        }
+
+        if let match = mediaToolCaches(node, components: components, path: path) {
+            return match
+        }
+
+        if let match = browserProfileCaches(node, components: components, path: path) {
+            return match
         }
 
         if let name = components.last, regenerableDirectories.contains(name) {
@@ -475,6 +880,182 @@ public enum RecommendationEngine {
         guard components.count == 3, components.last == ".Trash" else { return false }
         // `home` is the automount path to the same place.
         return components.first == "Users" || components.first == "home"
+    }
+
+    /// Caches belonging to the editing and design tools, which are the largest regenerable
+    /// directories on a working creative machine.
+    ///
+    /// Every match here earns its place from an anchored path or a vendor-specific name. None
+    /// of them match a bare English word: "Renders", "Previews", "Proxies" and "Cache" are
+    /// where a large share of 3D artists and photographers keep finished work, and matching one
+    /// of those on name alone is the fastest way to delete someone's output.
+    private static func mediaToolCaches(
+        _ node: FileNode, components: [String], path: String
+    ) -> Recommendation? {
+        guard let name = components.last, node.size > 0 else { return nil }
+
+        func made(
+            _ title: String, _ detail: String, _ tier: Recommendation.Tier, _ symbol: String,
+            key: String, plural: String, scope: String
+        ) -> Recommendation {
+            Recommendation(
+                title: title, detail: detail, path: path, size: node.size, tier: tier,
+                symbolName: symbol,
+                family: Recommendation.Family(key: key, plural: plural, scope: scope))
+        }
+
+        // Every Adobe video and audio app shares one media cache, keyed on the source clip
+        // rather than the project, so it long outlives the projects that filled it. Anchored
+        // under the user's own Application Support: the copy at the system root is licensing
+        // data, not cache.
+        if components.first == "Users", components.count >= 5,
+            Array(components.suffix(5).prefix(4))
+                == ["Library", "Application Support", "Adobe", "Common"],
+            name == "Media Cache Files" || name == "Media Cache"
+        {
+            return made(
+                "Adobe media cache",
+                "Decoded audio and video that Premiere and After Effects rebuild on import.",
+                .safe, "film.stack",
+                key: "adobe-media-cache", plural: "Adobe media caches", scope: "places")
+        }
+
+        // Photoshop and Lightroom both ship a Purge button for this one.
+        if components.suffix(3) == ["Library", "Caches", "Adobe Camera Raw"]
+            || components.suffix(5) == ["Library", "Caches", "Adobe", "Camera Raw", "Cache"]
+        {
+            return made(
+                "Camera Raw cache",
+                "Decoded RAW previews Lightroom and Photoshop rebuild as you browse.",
+                .safe, "camera.filters",
+                key: "camera-raw-cache", plural: "Camera Raw caches", scope: "places")
+        }
+
+        // The default cap is a share of the drive, so this grows to fill whatever it is given.
+        // The name is specific enough to match wherever the user pointed their scratch disk.
+        if name.hasPrefix("Adobe After Effects Disk Cache"), name.hasSuffix(".noindex") {
+            return made(
+                "After Effects disk cache",
+                "Cached preview frames After Effects re-renders as you scrub.",
+                .safe, "square.stack.3d.down.right.fill",
+                key: "ae-disk-cache", plural: "After Effects disk caches", scope: "places")
+        }
+
+        // One folder per directory that has ever held a project, so an editor who organises by
+        // job has one per job. Exact names, never a prefix match on "Adobe Premiere Pro ":
+        // "Adobe Premiere Pro Auto-Save" is the crash recovery copy of the project itself.
+        if name == "Adobe Premiere Pro Preview Files"
+            || name == "Adobe Premiere Pro Video Previews"
+            || name == "Adobe Premiere Pro Audio Previews"
+        {
+            let project = components.dropLast().last ?? "this project"
+            return made(
+                "Preview files in \(project)",
+                "Rendered timeline previews Premiere recreates when you render again.",
+                .safe, "rectangle.stack.fill",
+                key: "premiere-previews", plural: "Premiere preview files", scope: "projects")
+        }
+
+        // Order matters: "Smart Previews.lrdata" also ends in " Previews.lrdata", and smart
+        // previews are what let a photographer edit with the originals offline. For anyone
+        // travelling with a laptop they are the only editable copy on the machine.
+        if name.hasSuffix(" Smart Previews.lrdata") {
+            return made(
+                "Smart previews for \(catalogName(from: name, suffix: " Smart Previews.lrdata"))",
+                "Lossy copies that let you edit with the originals offline. Rebuilding them "
+                    + "needs the originals back.",
+                .review, "photo.stack",
+                key: "lightroom-smart-previews", plural: "Lightroom smart previews",
+                scope: "catalogs")
+        }
+        if name.hasSuffix(" Previews.lrdata") {
+            return made(
+                "Previews for \(catalogName(from: name, suffix: " Previews.lrdata"))",
+                "Thumbnail and preview cache Lightroom rebuilds as you browse.",
+                .safe, "photo.stack",
+                key: "lightroom-previews", plural: "Lightroom preview caches", scope: "catalogs")
+        }
+
+        // Resolve's working folder is configurable, so these cannot be anchored to a path. The
+        // names are CamelCase and vendor-specific, which is what makes matching them at any
+        // depth defensible where "Cache" or "Proxies" would not be. `.gallery`, which holds a
+        // colourist's graded stills and regenerates from nothing, is not in this list.
+        if name == "CacheClip" || name == "OptimizedMedia" {
+            return made(
+                "Resolve render cache",
+                "Cached renders Resolve rebuilds when you reopen the timeline.",
+                .safe, "wand.and.rays",
+                key: "resolve-cache", plural: "Resolve render caches", scope: "places")
+        }
+        if name == "ProxyMedia" {
+            return made(
+                "Resolve proxy media",
+                "Proxies Resolve rebuilds from the original footage, if the originals are "
+                    + "still online.",
+                .review, "wand.and.rays",
+                key: "resolve-proxy", plural: "Resolve proxy media", scope: "places")
+        }
+
+        return nil
+    }
+
+    /// Strips a known suffix so a row can name the catalog rather than the directory.
+    private static func catalogName(from name: String, suffix: String) -> String {
+        String(name.dropLast(suffix.count))
+    }
+
+    /// Chromium's compiled-JavaScript, GPU and shader caches, which live in each app's own
+    /// profile rather than in `~/Library/Caches`.
+    ///
+    /// Every Electron app carries a full Chromium, so a modern Mac has dozens of these. Mole
+    /// owns `~/Library/Caches` and does not reach here, which is why they are Disker's to
+    /// claim.
+    ///
+    /// The dangerous part is what sits beside them. `Local Storage`, `IndexedDB`,
+    /// `Local Extension Settings` and `Service Worker/Database` are all substantial and all
+    /// hold real state, so a rule that reaches one directory too far logs the user out of
+    /// everything. Hence exact names, and `Cache_Data` matched only inside `Cache` rather than
+    /// `Cache` itself.
+    private static func browserProfileCaches(
+        _ node: FileNode, components: [String], path: String
+    ) -> Recommendation? {
+        guard let name = components.last, node.size > 0,
+            components.contains("Application Support") || components.contains("Containers")
+                || components.contains("Group Containers")
+        else { return nil }
+
+        let parent = components.dropLast().last
+        let isCache =
+            rebuildableChromiumCaches.contains(name)
+            || (name == "Cache_Data" && parent == "Cache")
+            || ((name == "CacheStorage" || name == "ScriptCache") && parent == "Service Worker")
+        guard isCache else { return nil }
+
+        let app = appName(inside: components) ?? "an app"
+        return Recommendation(
+            title: "\(name) in \(app)",
+            detail: "Compiled scripts and shaders the app rebuilds on next launch, costing a "
+                + "second or two once.",
+            path: path, size: node.size, tier: .safe, symbolName: "bolt.horizontal.fill",
+            family: Recommendation.Family(
+                key: "chromium-profile-cache", plural: "rebuildable app caches", scope: "apps"))
+    }
+
+    /// Exact directory names Chromium uses for caches it will rebuild without being asked.
+    private static let rebuildableChromiumCaches: Set<String> = [
+        "Code Cache", "GPUCache", "DawnGraphiteCache", "DawnWebGPUCache", "GrShaderCache",
+        "ShaderCache", "CachedData", "component_crx_cache",
+    ]
+
+    /// The component just below the container directory, which is the app these caches belong
+    /// to — good enough to name a row without reading anything.
+    private static func appName(inside components: [String]) -> String? {
+        for anchor in ["Application Support", "Containers", "Group Containers"] {
+            if let index = components.lastIndex(of: anchor), index + 1 < components.count {
+                return components[index + 1]
+            }
+        }
+        return nil
     }
 
     private static func classifyFile(

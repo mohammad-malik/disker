@@ -126,19 +126,25 @@ case "volumes":
     print("\n  default: \(VolumeCatalog.defaultVolume()?.name ?? "none")")
 
 case "recommend":
-    let path = arguments.count >= 3 ? arguments[2] : NSHomeDirectory()
+    // Options are filtered out before the positional path is read, or `recommend --all` scans
+    // for a file literally named "--all" instead of defaulting to the home directory.
+    let path = arguments.dropFirst(2).first { !$0.hasPrefix("--") } ?? NSHomeDirectory()
     let result = try await VolumeScanner().scan(path: path)
     let recommendations = RecommendationEngine.analyze(result: result)
 
+    // `--all` prints every suggestion with its full path, which is what auditing a real disk
+    // against the protected-path list needs: the top thirty say nothing about the tail.
+    let showAll = arguments.contains("--all")
+
     var lastTier: Recommendation.Tier?
     var total: UInt64 = 0
-    for item in recommendations.prefix(30) {
+    for item in showAll ? recommendations : Array(recommendations.prefix(30)) {
         if item.tier != lastTier {
             print("\n\(item.tier.label)")
             lastTier = item.tier
         }
         print("  \(formatBytes(item.size).padded(to: 10))  \(item.title)")
-        print("  \(String(repeating: " ", count: 12))\(item.displayPath)")
+        print("  \(String(repeating: " ", count: 12))\(showAll ? item.path : item.displayPath)")
         total &+= item.size
     }
     print("\n  \(recommendations.count) suggestions, \(formatBytes(total)) shown")
