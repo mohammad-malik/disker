@@ -1,0 +1,15 @@
+diff --git a/Sources/removemacai/App/Views.swift b/Sources/removemacai/App/Views.swift
+index e812b6b..8273c3d 100644
+--- a/Sources/removemacai/App/Views.swift
++++ b/Sources/removemacai/App/Views.swift
+@@ -218,8 +218,9 @@ struct ReviewSheet: View {
+     .task {
+       let wanted = model.wanted
+       let ai = model.targetAI
++      let undo = model.touched
+       let snapshot = model.snapshot
+-      plan = await Task.detached { Plan.make(wanted: wanted, ai: ai, snapshot: snapshot) }.value
++      plan = await Task.detached { Plan.make(wanted: wanted, ai: ai, undo: undo, snapshot: snapshot) }.value
+     }
+   }
+ 

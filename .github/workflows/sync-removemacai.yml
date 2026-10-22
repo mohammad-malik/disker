@@ -28,10 +28,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Through the environment, not interpolated into the command: `${{ }}` is pasted into
+      # the script before the shell parses it, so a ref containing `;` would run as code.
       - name: Vendor the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: ./Tools/sync-removemacai.sh ${{ inputs.ref }}
+          REF: ${{ inputs.ref }}
+        run: ./Tools/sync-removemacai.sh "$REF"
 
       - name: Describe it
         id: describe

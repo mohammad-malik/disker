@@ -88,7 +88,10 @@ and `Sources/UAF` are byte-for-byte copies of a release, and nothing in them is 
 here. Refresh them with `./Tools/sync-removemacai.sh [tag]`, which records the commit in
 `Upstream/UPSTREAM`, then build. `DebloatBridge.swift` is the only Disker-owned file in
 that module; if a resync breaks the build, the fix goes there, never into `Upstream/`.
-A change Disker genuinely needs from the engine belongs upstream as a pull request.
+A change Disker genuinely needs from the engine belongs upstream as a pull request. Until
+upstream ships it, it goes in `Tools/removemacai-patches/` as a `.patch` against the
+upstream repository root, which the sync script applies after every checkout and lists in
+`Upstream/UPSTREAM`. When a patch stops applying, upstream has usually fixed it: delete it.
 
 `.github/workflows/sync-removemacai.yml` runs that sync daily and opens a pull request
 (titled "build fails" or "tests fail" when it does). It never merges or releases: the

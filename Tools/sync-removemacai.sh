@@ -6,10 +6,11 @@
 #
 # Upstream ships a release every few days, and the fixes are in exactly the parts that rot:
 # asset-set names, settings keys, Music's launch label, which macOS has which feature. So the
-# copy is never edited by hand. `Sources/RemoveMacAIKit/Upstream` and `Sources/UAF` mirror
-# upstream byte for byte, and everything Disker needs lives in `DebloatBridge.swift` beside
-# them, which this script leaves alone (it also regenerates `UpstreamRelease.swift`, the
-# record of which release is inside). Resyncing is then this script plus a build.
+# copy is never edited by hand. `Sources/RemoveMacAIKit/Upstream` and `Sources/UAF` are the
+# release plus the patches in `Tools/removemacai-patches` and nothing else, and everything
+# Disker needs lives in `DebloatBridge.swift` beside them, which this script leaves alone (it
+# also regenerates `UpstreamRelease.swift`, the record of which release is inside).
+# Resyncing is then this script plus a build.
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
@@ -21,12 +22,30 @@ fi
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-git clone --quiet "https://github.com/$REPO.git" "$WORK/src"
-git -C "$WORK/src" -c advice.detachedHead=false checkout --quiet "$REF"
+# Only the one commit. A full clone carries upstream's whole history and its demo videos,
+# which took minutes; fetching by name works for a tag, a branch or a full commit hash.
+git init --quiet "$WORK/src"
+git -C "$WORK/src" fetch --quiet --depth 1 "https://github.com/$REPO.git" "$REF"
+git -C "$WORK/src" -c advice.detachedHead=false checkout --quiet FETCH_HEAD
 COMMIT="$(git -C "$WORK/src" rev-parse HEAD)"
 # The upstream commit's own date, not today's: what the Debloat window shows is how old the
 # copy is, and a sync that changes nothing must not make it look fresher.
 DATE="$(git -C "$WORK/src" log -1 --format=%cs)"
+
+# Fixes Disker needs before upstream ships them, each also sent upstream. Applied to the
+# clone, so the vendored copy is still exactly "this release plus these files". A patch
+# that no longer applies usually means upstream fixed it: delete the patch and sync again.
+PATCHES=()
+for patch in "$REPO_ROOT"/Tools/removemacai-patches/*.patch; do
+    [[ -e "$patch" ]] || continue
+    if ! git -C "$WORK/src" apply --check "$patch" 2>/dev/null; then
+        echo "error: $(basename "$patch") no longer applies to $REF." >&2
+        echo "If upstream has fixed it, delete the patch and run this again." >&2
+        exit 1
+    fi
+    git -C "$WORK/src" apply "$patch"
+    PATCHES+=("$(basename "$patch")")
+done
 
 KIT="$REPO_ROOT/Sources/RemoveMacAIKit"
 rm -rf "$KIT/Upstream" "$REPO_ROOT/Sources/UAF"
@@ -39,6 +58,7 @@ cat > "$KIT/Upstream/UPSTREAM" <<EOF
 repository: https://github.com/$REPO
 ref: $REF
 commit: $COMMIT
+patches: ${PATCHES[*]:-none}
 EOF
 
 # Generated alongside the bridge rather than read from UPSTREAM at run time, so the app has

@@ -218,8 +218,9 @@ struct ReviewSheet: View {
     .task {
       let wanted = model.wanted
       let ai = model.targetAI
+      let undo = model.touched
       let snapshot = model.snapshot
-      plan = await Task.detached { Plan.make(wanted: wanted, ai: ai, snapshot: snapshot) }.value
+      plan = await Task.detached { Plan.make(wanted: wanted, ai: ai, undo: undo, snapshot: snapshot) }.value
     }
   }
 
