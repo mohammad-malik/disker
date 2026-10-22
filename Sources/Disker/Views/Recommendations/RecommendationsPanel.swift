@@ -22,25 +22,45 @@ struct RecommendationsPanel: View {
     /// user had just opened. Keyed on the cluster's stable id, not on its members, whose ids
     /// are fresh on every analysis pass.
     @State private var expanded: Set<String> = []
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Group {
             if model.recommendations.isEmpty {
-                ContentUnavailableView(
-                    "Nothing obvious to clean",
-                    systemImage: "checkmark.circle",
-                    description: Text(
+                ContentUnavailableView {
+                    Label("Nothing obvious to clean", systemImage: "checkmark.circle")
+                } description: {
+                    Text(
                         "Disker found no build artefacts or stale large files. "
                             + "The Mole panel may still have caches to clear.")
-                )
+                } actions: {
+                    if let bytes = appleIntelligenceBytes {
+                        Button("Remove \(bytes.formattedBytes) of Apple Intelligence Models…") {
+                            openWindow(id: DebloatWindow.id)
+                        }
+                    }
+                }
             } else {
                 list
             }
         }
     }
 
+    /// The model figure when there is one worth offering. Not a tier of its own: the
+    /// models are not files Disker can trash, they go through RemoveMacAI's review, so
+    /// this only points there.
+    private var appleIntelligenceBytes: UInt64? {
+        guard let bytes = model.appleIntelligenceBytes, bytes > 0 else { return nil }
+        return bytes
+    }
+
     private var list: some View {
         List {
+            if let bytes = appleIntelligenceBytes {
+                Section {
+                    DebloatSuggestionRow(bytes: bytes) { openWindow(id: DebloatWindow.id) }
+                }
+            }
             ForEach(model.recommendationGroups) { group in
                 Section {
                     ForEach(group.entries) { entry in
@@ -87,6 +107,39 @@ struct RecommendationsPanel: View {
         } else {
             expanded.insert(id)
         }
+    }
+}
+
+/// Points at the Debloat window from the list people open to get space back.
+private struct DebloatSuggestionRow: View {
+    let bytes: UInt64
+    let open: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "apple.intelligence")
+                .foregroundStyle(.purple)
+                .frame(width: 20)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Apple Intelligence models")
+                    .font(.callout.weight(.medium))
+                Text("Turn off the features you don't use and delete their models. Every change can be undone.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 8)
+
+            Text(bytes.formattedBytes)
+                .font(.callout)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+
+            Button("Review…", action: open)
+        }
+        .padding(.vertical, 4)
     }
 }
 

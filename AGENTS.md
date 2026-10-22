@@ -77,6 +77,28 @@ revokes the grant.
 - `Sources/Disker` — the app. SwiftUI throughout except the window shell, which is an
   `NSSplitViewController` (`Views/Shell/SplitShell.swift`).
 - `Tests/DiskerCoreTests` — swift-testing suites over `DiskerCore`.
+- `Sources/RemoveMacAIKit` and `Sources/UAF` — [RemoveMacAI](https://github.com/omlahore/RemoveMacAI)
+  (MIT), shown in the Debloat macOS window (Scan menu, ⇧⌘D).
+
+## RemoveMacAI is vendored, not forked
+
+Upstream ships every few days, and its fixes land in the parts that rot fastest: asset-set
+names, settings keys, which macOS has which feature. So `Sources/RemoveMacAIKit/Upstream`
+and `Sources/UAF` are byte-for-byte copies of a release, and nothing in them is edited
+here. Refresh them with `./Tools/sync-removemacai.sh [tag]`, which records the commit in
+`Upstream/UPSTREAM`, then build. `DebloatBridge.swift` is the only Disker-owned file in
+that module; if a resync breaks the build, the fix goes there, never into `Upstream/`.
+A change Disker genuinely needs from the engine belongs upstream as a pull request.
+
+`.github/workflows/sync-removemacai.yml` runs that sync daily and opens a pull request
+(titled "build fails" or "tests fail" when it does). It never merges or releases: the
+vendored code runs with administrator rights, so a person reads the diff first.
+
+A fix only reaches users through a Disker release, so Disker checks GitHub for one at
+launch (`ReleaseCheck`) and shows a sidebar card when it finds one. It is the only network
+request Disker makes, it can be turned off in Settings, and it is skipped in builds made
+without `DISKER_VERSION`, which `bundle.sh` marks `DiskerDevelopmentBuild`. To see the card
+locally, bundle with `DISKER_VERSION` set below the latest release.
 
 ## Design constraints worth knowing before touching the UI
 

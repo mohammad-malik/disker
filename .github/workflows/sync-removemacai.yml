@@ -1,0 +1,78 @@
+# Opens a pull request when RemoveMacAI publishes a release.
+#
+# Upstream ships every few days, and its fixes are what keep Debloat macOS working after a
+# macOS update. This turns "remember to run Tools/sync-removemacai.sh" into a PR waiting to
+# be merged. It never merges or releases on its own: the vendored code runs with
+# administrator rights on users' Macs, so a person reads the diff first.
+#
+# Needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull
+# requests" turned on for this repository.
+name: Sync RemoveMacAI
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag, branch or commit (empty for the newest release)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Vendor the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./Tools/sync-removemacai.sh ${{ inputs.ref }}
+
+      - name: Describe it
+        id: describe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ref="$(awk '/^ref:/ {print $2}' Sources/RemoveMacAIKit/Upstream/UPSTREAM)"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          {
+            echo "Vendors [RemoveMacAI $ref](https://github.com/omlahore/RemoveMacAI/releases/tag/$ref) with \`Tools/sync-removemacai.sh\`."
+            echo
+            echo "Read the diff under \`Sources/RemoveMacAIKit/Upstream\` and \`Sources/UAF\` before merging: this code runs with administrator rights. If the build broke, the fix goes in \`DebloatBridge.swift\`, never in \`Upstream/\`."
+            echo
+            echo "## Upstream release notes"
+            echo
+            gh release view "$ref" -R omlahore/RemoveMacAI --json body -q .body || echo "_None published._"
+          } > "$RUNNER_TEMP/body.md"
+
+      # The runner has Xcode, which puts swift-testing on the search path itself, so the
+      # Command Line Tools workarounds in Tools/ are not needed here.
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: swift build
+
+      - name: Test
+        id: test
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: swift test
+
+      # Opened even when the build fails, with the title saying so: a broken sync still
+      # needs a person, and a quiet failure is how the copy goes stale.
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: sync/removemacai
+          delete-branch: true
+          commit-message: Vendor RemoveMacAI ${{ steps.describe.outputs.ref }}
+          title: >-
+            Vendor RemoveMacAI ${{ steps.describe.outputs.ref }}${{
+              steps.build.outcome != 'success' && ' (build fails)' ||
+              steps.test.outcome != 'success' && ' (tests fail)' || '' }}
+          body-path: ${{ runner.temp }}/body.md
+          labels: dependencies

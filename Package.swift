@@ -13,9 +13,22 @@ let package = Package(
         // Pure model + scanning logic. No SwiftUI, so it stays unit-testable
         // and benchmarkable headlessly — which matters while Previews are unavailable.
         .target(name: "DiskerCore"),
+        // RemoveMacAI, vendored verbatim by Tools/sync-removemacai.sh. Upstream builds in the
+        // Swift 5 language mode and ships its own entry point, which Disker replaces with
+        // `DebloatBridge.swift`; nothing under `Upstream/` is edited here.
+        .target(name: "UAF", cSettings: [.unsafeFlags(["-fobjc-arc"])]),
+        .target(
+            name: "RemoveMacAIKit",
+            dependencies: ["UAF"],
+            exclude: [
+                "Upstream/main.swift", "Upstream/LICENSE", "Upstream/THIRD-PARTY-NOTICES.md",
+                "Upstream/UPSTREAM",
+            ],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "Disker",
-            dependencies: ["DiskerCore"],
+            dependencies: ["DiskerCore", "RemoveMacAIKit"],
             swiftSettings: [.unsafeFlags(["-parse-as-library"])]
         ),
         // Headless harness for benchmarking and cross-checking the scanner against `du`.

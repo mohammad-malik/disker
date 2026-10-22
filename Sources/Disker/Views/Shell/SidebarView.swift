@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Bindable var model: AppModel
+    @Environment(\.openWindow) private var openWindow
 
     /// A standard source list.
     ///
@@ -43,6 +44,7 @@ struct SidebarView: View {
                         model.section = item
                     }
                 }
+                debloatRow
             }
 
             Section("Locations") {
@@ -74,6 +76,12 @@ struct SidebarView: View {
         .padding(.top, 8)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
+                if let update = model.availableUpdate {
+                    Divider()
+                    UpdateCard(release: update)
+                        .padding(.horizontal, 12)
+                        .padding(.top, 12)
+                }
                 Divider()
                 FreeSpaceCard(volume: model.volume)
                     .padding(12)
@@ -127,6 +135,44 @@ struct SidebarView: View {
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
     }
 
+    /// Opens RemoveMacAI's window rather than selecting a section, so it is never
+    /// highlighted. It sits among the sections anyway, with the same size badge, because a
+    /// menu item and a shortcut alone left the feature invisible: the sidebar is where every
+    /// other way to get space back is found, and the model figure is the reason to click.
+    private var debloatRow: some View {
+        Button {
+            openWindow(id: DebloatWindow.id)
+        } label: {
+            HStack(spacing: 6) {
+                // Explicit, as in `sidebarRow`: a plain button's label is otherwise drawn in
+                // the dimmed style that reads as disabled.
+                Label("Debloat macOS", systemImage: "apple.intelligence")
+                    .lineLimit(1)
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 6)
+                if let bytes = model.appleIntelligenceBytes, bytes > 0 {
+                    Text(bytes.formattedBytes)
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+                Image(systemName: "arrow.up.forward.app")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .listRowInsets(EdgeInsets(top: 1, leading: 0, bottom: 1, trailing: 0))
+        .listRowSeparator(.hidden)
+        .help("Turn off Apple Intelligence, analytics and other macOS extras, and delete the AI models")
+        .accessibilityHint("Opens in a new window")
+    }
+
     private func badge(for item: AppModel.Section) -> String? {
         switch item {
         case .recommendations:
@@ -165,6 +211,43 @@ struct SidebarView: View {
         case "opt", "usr", "bin", "sbin": return "terminal.fill"
         case "private", "var": return "lock.fill"
         default: return "folder.fill"
+        }
+    }
+}
+
+/// A newer Disker is out. In the sidebar rather than an alert: it is worth knowing, not
+/// worth interrupting a scan for, and it stays put until the user acts on it.
+struct UpdateCard: View {
+    let release: AvailableRelease
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        // Stacked rather than one row: at sidebar width a trailing button squeezed the title
+        // into breaking mid-phrase.
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Disker \(release.version) is available", systemImage: "arrow.down.circle.fill")
+                .font(.subheadline.weight(.medium))
+                .labelStyle(TintedIconLabelStyle())
+            Text("Includes the latest Debloat fixes.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Download") { openURL(release.url) }
+                .controlSize(.small)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // No material, for the same reason as `FreeSpaceCard`: the sidebar is already glass.
+        .padding(.horizontal, 12)
+        .accessibilityElement(children: .combine)
+        .accessibilityAction(named: "Download") { openURL(release.url) }
+    }
+}
+
+/// An accent-coloured icon beside primary text.
+private struct TintedIconLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 6) {
+            configuration.icon.foregroundStyle(.tint)
+            configuration.title
         }
     }
 }
