@@ -16,13 +16,18 @@ let package = Package(
         // RemoveMacAI, vendored verbatim by Tools/sync-removemacai.sh. Upstream builds in the
         // Swift 5 language mode and ships its own entry point, which Disker replaces with
         // `DebloatBridge.swift`; nothing under `Upstream/` is edited here.
+        //
+        // Left out: the command-line entry point and its self-test, which only it reaches.
+        // The self-test uses helpers that live in main.swift, so the two go together; it still
+        // runs, against upstream's own build of the same files, in
+        // Tools/check-removemacai.sh.
         .target(name: "UAF", cSettings: [.unsafeFlags(["-fobjc-arc"])]),
         .target(
             name: "RemoveMacAIKit",
             dependencies: ["UAF"],
             exclude: [
-                "Upstream/main.swift", "Upstream/LICENSE", "Upstream/THIRD-PARTY-NOTICES.md",
-                "Upstream/UPSTREAM",
+                "Upstream/main.swift", "Upstream/SelfTest.swift", "Upstream/LICENSE",
+                "Upstream/THIRD-PARTY-NOTICES.md", "Upstream/UPSTREAM",
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

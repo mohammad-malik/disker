@@ -93,9 +93,16 @@ upstream ships it, it goes in `Tools/removemacai-patches/` as a `.patch` against
 upstream repository root, which the sync script applies after every checkout and lists in
 `Upstream/UPSTREAM`. When a patch stops applying, upstream has usually fixed it: delete it.
 
-`.github/workflows/sync-removemacai.yml` runs that sync daily and opens a pull request
-(titled "build fails" or "tests fail" when it does). It never merges or releases: the
-vendored code runs with administrator rights, so a person reads the diff first.
+`.github/workflows/sync-removemacai.yml` runs that sync daily, then builds, tests and runs
+`Tools/check-removemacai.sh`. That script runs upstream's own self-test against the
+vendored files (built as upstream builds them, since Disker's build leaves out the
+command-line entry point and the self-test with it) and trips on upstream code that is
+wrong inside Disker: network access, its own update check or command-line installer
+reachable from the hosted window, a second `@main`. When everything passes the update
+merges itself; otherwise the pull request stays open titled with what failed. A sync that
+cannot run at all opens an issue. Nothing is released automatically.
+
+`ci.yml` runs the same build, tests and checks on every pull request and push to main.
 
 A fix only reaches users through a Disker release, so Disker checks GitHub for one at
 launch (`ReleaseCheck`) and shows a sidebar card when it finds one. It is the only network
