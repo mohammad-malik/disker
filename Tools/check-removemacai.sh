@@ -18,12 +18,22 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 UPSTREAM="$REPO_ROOT/Sources/RemoveMacAIKit/Upstream"
 fail=0
 
-# Files allowed to reference a symbol: where it is defined, upstream's App scene (which
-# Disker does not use), and the self-test.
+# Each tripwire names a line it must catch, checked before it is trusted. A pattern that
+# matches nothing reads exactly like clean upstream code, and `\b` — what these first used —
+# is an extension that not every grep -E honours, so a guard could have been switched off
+# by the machine it ran on. The patterns use only POSIX classes now, and the sample proves
+# it on whichever grep this is.
+#
+# Then the files allowed to reference the symbol: where it is defined, upstream's App scene
+# (which Disker does not use), and the self-test.
 tripwire() {
-    local pattern="$1" why="$2"
-    shift 2
+    local pattern="$1" sample="$2" why="$3"
+    shift 3
     local allowed=("$@") hits
+    if ! printf '%s\n' "$sample" | grep -qE "$pattern"; then
+        echo "error: tripwire /$pattern/ does not match its own sample, so it would catch nothing." >&2
+        exit 1
+    fi
     hits="$( (grep -rlE "$pattern" "$UPSTREAM" --include="*.swift" || true) | sed "s|$UPSTREAM/||" | sort)"
     for file in $hits; do
         if [[ ! " ${allowed[*]} " == *" $file "* ]]; then
@@ -33,16 +43,23 @@ tripwire() {
     done
 }
 
+# "Not part of a longer name", spelled with POSIX classes instead of `\b`.
+EDGE='(^|[^[:alnum:]_])'
+
 tripwire 'URLSession|URLRequest' \
+    '      let (data, response) = try await URLSession.shared.data(for: request)' \
     "RemoveMacAI code that reaches the network from inside Disker. Disker promises one request, its own update check." \
     Updates.swift
-tripwire '\bUpdates\.' \
+tripwire "${EDGE}Updates\." \
+    '      switch await Updates.latest() {' \
     "RemoveMacAI's update check, outside its App scene, would offer RemoveMacAI downloads inside Disker." \
     Updates.swift App/RemoveMacAIApp.swift SelfTest.swift
-tripwire '\bCommandLineTool\.' \
+tripwire "${EDGE}CommandLineTool\." \
+    '    let path = CommandLineTool.path' \
     "RemoveMacAI's command-line installer, outside its App scene, would install a tool from Disker." \
     CommandLineTool.swift App/RemoveMacAIApp.swift SelfTest.swift
 tripwire '^@main' \
+    '@main' \
     "a second entry point would clash with Disker's." \
     __none__
 

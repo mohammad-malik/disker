@@ -120,7 +120,9 @@ jobs:
           body="The daily sync could not vendor upstream: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           Usually a patch in \`Tools/removemacai-patches\` no longer applies, because upstream changed or fixed that code. Check whether upstream fixed it; if so, delete the patch."
-          existing="$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number')"
+          # `// empty`: with no match, `.[0].number` prints "null", which reads as an issue
+          # number and sent the first failure to a comment on nothing.
+          existing="$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number // empty')"
           if [[ -n "$existing" ]]; then
             gh issue comment "$existing" --body "Still failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           else
