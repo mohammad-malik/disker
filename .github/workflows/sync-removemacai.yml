@@ -1,0 +1,130 @@
+# Keeps the vendored RemoveMacAI current.
+#
+# Daily, it vendors upstream's newest release with Tools/sync-removemacai.sh, then builds
+# Disker, runs its tests, and runs Tools/check-removemacai.sh: upstream's own self-test on
+# the vendored files, and tripwires for upstream behaviour that is wrong inside Disker.
+#
+#   - All pass: the update is merged to main by itself.
+#   - Anything fails: a pull request is left open, titled with what failed, for a person.
+#   - The sync itself fails (usually a patch in Tools/removemacai-patches no longer
+#     applies, because upstream fixed it): an issue is opened, so it is not silent.
+#
+# Nothing is released by this. Users get the update in the next Disker release.
+#
+# Needs Settings → Actions → General → "Allow GitHub Actions to create and approve pull
+# requests" turned on for this repository.
+name: Sync RemoveMacAI
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Tag, branch or commit (empty for the newest release)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: sync-removemacai
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      # Through the environment, not interpolated into the command: `${{ }}` is pasted into
+      # the script before the shell parses it, so a ref containing `;` would run as code.
+      - name: Vendor the release
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF: ${{ inputs.ref }}
+        run: ./Tools/sync-removemacai.sh "$REF"
+
+      - name: Describe it
+        id: describe
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ref="$(awk '/^ref:/ {print $2}' Sources/RemoveMacAIKit/Upstream/UPSTREAM)"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          {
+            echo "Vendors [RemoveMacAI $ref](https://github.com/omlahore/RemoveMacAI/releases/tag/$ref) with \`Tools/sync-removemacai.sh\`."
+            echo
+            echo "If anything below failed, the fix goes in \`DebloatBridge.swift\`, \`Package.swift\` or \`Tools/removemacai-patches\`, never in \`Upstream/\`."
+            echo
+            echo "## Upstream release notes"
+            echo
+            gh release view "$ref" -R omlahore/RemoveMacAI --json body -q .body || echo "_None published._"
+          } > "$RUNNER_TEMP/body.md"
+
+      # The runner has Xcode, which puts swift-testing on the search path itself, so the
+      # Command Line Tools workarounds in Tools/ are not needed here.
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: swift build
+
+      - name: Test
+        id: test
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: swift test
+
+      - name: Check RemoveMacAI
+        id: check
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: ./Tools/check-removemacai.sh
+
+      - name: Verdict
+        id: verdict
+        run: |
+          if [[ "${{ steps.build.outcome }}" != success ]]; then echo "failed=build fails" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.test.outcome }}" != success ]]; then echo "failed=tests fail" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ steps.check.outcome }}" != success ]]; then echo "failed=RemoveMacAI checks fail" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Does nothing when the sync changed no files, which is most days.
+      - uses: peter-evans/create-pull-request@v7
+        id: pr
+        with:
+          branch: sync/removemacai
+          delete-branch: true
+          commit-message: Vendor RemoveMacAI ${{ steps.describe.outputs.ref }}
+          title: >-
+            Vendor RemoveMacAI ${{ steps.describe.outputs.ref }}${{
+              steps.verdict.outputs.failed && format(' ({0})', steps.verdict.outputs.failed) || '' }}
+          body-path: ${{ runner.temp }}/body.md
+          labels: dependencies
+
+      - name: Merge when everything passed
+        if: steps.pr.outputs.pull-request-number && !steps.verdict.outputs.failed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr merge "${{ steps.pr.outputs.pull-request-number }}" --merge --delete-branch
+
+      - name: Report a sync that could not run
+        if: failure() && steps.sync.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="RemoveMacAI sync is failing"
+          body="The daily sync could not vendor upstream: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Usually a patch in \`Tools/removemacai-patches\` no longer applies, because upstream changed or fixed that code. Check whether upstream fixed it; if so, delete the patch."
+          # `// empty`: with no match, `.[0].number` prints "null", which reads as an issue
+          # number and sent the first failure to a comment on nothing.
+          existing="$(gh issue list --state open --search "in:title \"$title\"" --json number -q '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "Still failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

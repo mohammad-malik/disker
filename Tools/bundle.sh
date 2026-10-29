@@ -17,6 +17,12 @@ CONFIGURATION="${1:-release}"
 BUILD_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path "${TESTING_FLAGS[@]}" | tail -1)"
 APP_DIR="build/$APP_NAME.app"
 VERSION="${DISKER_VERSION:-1.0.0}"
+# A build without an explicit version is a local one. It says so, so that the update check
+# does not offer every published release to a 1.0.0 that is really today's source.
+DEVELOPMENT_KEY=""
+if [[ -z "${DISKER_VERSION:-}" ]]; then
+    DEVELOPMENT_KEY="<key>DiskerDevelopmentBuild</key><true/>"
+fi
 
 echo "==> Building ($CONFIGURATION)"
 swift build -c "$CONFIGURATION" --product "$APP_NAME" "${TESTING_FLAGS[@]}"
@@ -38,6 +44,7 @@ cat >"$APP_DIR/Contents/Info.plist" <<EOF
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
+    $DEVELOPMENT_KEY
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
     <key>NSHighResolutionCapable</key><true/>

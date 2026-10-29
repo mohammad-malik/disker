@@ -7,6 +7,7 @@ import SwiftUI
 struct DiskerCommands: Commands {
     @Bindable var model: AppModel
     @Bindable var appearance: AppearanceController
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         // Disker has no documents, so the stock New/Open items would be dead weight.
@@ -55,6 +56,13 @@ struct DiskerCommands: Commands {
                 model.launchMoleCleanup()
             }
             .keyboardShortcut("k", modifiers: [.command, .shift])
+
+            // Settings and Apple Intelligence rather than files, but the models it deletes
+            // are several gigabytes, which is why it sits with the cleanup tools.
+            Button("Debloat macOS…") {
+                openWindow(id: DebloatWindow.id)
+            }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
         }
 
         CommandMenu("Navigate") {

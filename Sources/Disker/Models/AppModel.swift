@@ -1,6 +1,7 @@
 import AppKit
 import DiskerCore
 import Observation
+import RemoveMacAIKit
 import SwiftUI
 
 /// Single source of truth for the window.
@@ -90,6 +91,14 @@ final class AppModel {
     /// When the displayed Mole preview was taken, if it came from cache rather than a run
     /// just now. Shown alongside the figure so a day-old number is never mistaken for live.
     var moleCheckedAt: Date?
+    /// Apple Intelligence models on disk, from RemoveMacAI. Nil until asked, and when Apple's
+    /// asset service does not answer — in which case nothing advertises a figure.
+    var appleIntelligenceBytes: UInt64?
+    /// A newer Disker on GitHub, when the launch check found one.
+    var availableUpdate: AvailableRelease?
+
+    /// The Settings switch for the update check. On unless turned off.
+    static let checksForUpdatesKey = "CheckForUpdates"
 
     /// Nodes from the scan root down to whatever the chart is currently centred on.
     /// Doubles as the breadcrumb and as the source of full paths, which is why nodes
@@ -566,6 +575,26 @@ final class AppModel {
             guard entry.isStale else { return }
         }
         await refreshMoleReport()
+    }
+
+    /// Re-reads the Apple Intelligence model size. Cheap enough to ask on launch, and asked
+    /// again when the Debloat window closes, since deleting the models is what it is for.
+    func loadAppleIntelligenceBytes() async {
+        appleIntelligenceBytes = await Debloat.modelBytesOnDisk()
+    }
+
+    /// Looks for a newer Disker, unless the user turned that off or this is a local build.
+    ///
+    /// Once per launch. Disker is opened, used and closed, so a timer would rarely fire, and
+    /// the RemoveMacAI fixes that make a release urgent are a reason to look every time.
+    func checkForUpdates() async {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: Self.checksForUpdatesKey) as? Bool ?? true,
+            Bundle.main.object(forInfoDictionaryKey: "DiskerDevelopmentBuild") as? Bool != true,
+            let current = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                as? String
+        else { return }
+        availableUpdate = await ReleaseCheck.fetch(current: current)
     }
 
     /// Asks Mole again regardless of what is cached.

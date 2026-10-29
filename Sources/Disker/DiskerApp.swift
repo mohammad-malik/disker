@@ -1,6 +1,21 @@
 import AppKit
 import DiskerCore
+import RemoveMacAIKit
 import SwiftUI
+
+enum DebloatWindow {
+    static let id = "debloat"
+
+    /// "RemoveMacAI 1.2.0-beta.1 · 19 Oct 2026", from what the sync script recorded.
+    static var provenance: String {
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.dateFormat = "yyyy-MM-dd"
+        let date = parser.date(from: Debloat.upstreamDate)
+            .map { $0.formatted(date: .abbreviated, time: .omitted) } ?? Debloat.upstreamDate
+        return "RemoveMacAI \(Debloat.upstreamVersion) · \(date)"
+    }
+}
 
 @main
 struct DiskerApp: App {
@@ -19,6 +34,32 @@ struct DiskerApp: App {
         // suppressed all three, which is why none of the real material was visible.
         .windowToolbarStyle(.unified)
         .commands { DiskerCommands(model: model, appearance: appearance) }
+
+        // RemoveMacAI's app, unchanged, in a window of its own. It lays out its own sidebar
+        // and sheets, and a resync can redraw any of them, so it is not folded into the
+        // split shell where Disker's layout would have to keep pace with upstream's.
+        Window("Debloat macOS", id: DebloatWindow.id) {
+            DebloatView()
+                .frame(minWidth: 860, minHeight: 600)
+                // Deleting the models is the point of the window, so the sidebar badge would
+                // otherwise go on advertising space that has already been freed.
+                .onDisappear { Task { await model.loadAppleIntelligenceBytes() } }
+                // Which copy of RemoveMacAI this is, and how old. When a switch stops taking
+                // effect after a macOS update, this is what tells the user it is the copy
+                // that is behind, and the button is how they catch up.
+                .navigationSubtitle(DebloatWindow.provenance)
+                .toolbar {
+                    if let update = model.availableUpdate {
+                        ToolbarItem(placement: .primaryAction) {
+                            Link(destination: update.url) {
+                                Label("Update Disker to \(update.version)", systemImage: "arrow.down.circle")
+                            }
+                            .help("Disker \(update.version) carries newer Debloat fixes")
+                        }
+                    }
+                }
+        }
+        .defaultSize(width: 1000, height: 700)
 
         Settings { SettingsView(model: model, appearance: appearance) }
     }
@@ -49,6 +90,10 @@ struct ContentView: View {
         .navigationSubtitle(subtitle)
         .toolbar { toolbarContent }
         .task {
+            // Its own task: the scan and Mole's check below can take minutes, and the model
+            // figure is what makes the Debloat row worth noticing in the meantime.
+            Task { await model.loadAppleIntelligenceBytes() }
+            Task { await model.checkForUpdates() }
             model.refreshVolumes()
             model.refreshVolume()
             // Show the previous scan instantly when there is one. Only walk the disk when
@@ -233,6 +278,7 @@ struct ContentView: View {
 struct SettingsView: View {
     @Bindable var model: AppModel
     @Bindable var appearance: AppearanceController
+    @AppStorage(AppModel.checksForUpdatesKey) private var checksForUpdates = true
 
     var body: some View {
         Form {
@@ -248,6 +294,16 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
             }
 
+            Section("Updates") {
+                Toggle("Check for updates when Disker opens", isOn: $checksForUpdates)
+                Text(
+                    "Asks GitHub for the latest Disker release, and nothing else. Updates "
+                        + "carry fixes for Debloat macOS when a macOS update changes what it relies on."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             Section("Disk") {
                 LabeledContent("Analyzing", value: model.selectedVolume?.name ?? "—")
                 LabeledContent("Path", value: model.scanRoot)
@@ -260,6 +316,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 380)
+        .frame(width: 460, height: 500)
     }
 }

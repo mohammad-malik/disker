@@ -1,0 +1,28 @@
+# Builds and tests every pull request and every push to main, including the vendored
+# RemoveMacAI's own self-test and the tripwires in Tools/check-removemacai.sh.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+
+      # The runner has Xcode, which puts swift-testing on the search path itself, so the
+      # Command Line Tools workarounds in Tools/build.sh and Tools/test.sh are not needed.
+      - name: Build
+        run: swift build
+
+      - name: Test
+        run: swift test
+
+      - name: Check RemoveMacAI
+        run: ./Tools/check-removemacai.sh
