@@ -30,9 +30,22 @@ If you are contributing, keep the boundary at the process edge. Install Mole wit
 
 This note is a good-faith engineering analysis, not legal advice.
 
+## RemoveMacAI
+
+[RemoveMacAI](https://github.com/omlahore/RemoveMacAI) is licensed **MIT**, and builds on
+[pared](https://github.com/4evy/pared), also MIT. Unlike Mole, it *is* included: the Debloat
+macOS window is RemoveMacAI's own interface and engine, compiled into Disker.
+
+- `Sources/RemoveMacAIKit/Upstream` and `Sources/UAF` are a copy of a RemoveMacAI release,
+  replaced wholesale by `Tools/sync-removemacai.sh` and never edited by hand. The only
+  changes are the patches in `Tools/removemacai-patches`, each also meant for upstream.
+- MIT asks that its notice travel with every copy. Both licences are in
+  `Sources/RemoveMacAIKit/Upstream`, and `bundle.sh` copies them into
+  `Disker.app/Contents/Resources/RemoveMacAI` so they ship inside the app as well.
+
 ## Everything else
 
-Disker has no third-party package dependencies. `Package.swift` declares none; it builds
-against the macOS SDK and the Swift standard library only.
+Disker declares no package dependencies. `Package.swift` builds against the macOS SDK and
+the Swift standard library, plus the RemoveMacAI copy above.
 
 The app icons in `Resources/` are original artwork belonging to the project.

@@ -1,5 +1,36 @@
 # Changelog
 
+## v1.9 — 2026-10-29
+
+### Debloat macOS
+
+- Disker can now turn off Apple Intelligence and delete its models, which take 6–7 GB on a
+  typical Mac, along with Mac Analytics, personalized ads, Siri and search data sharing, the
+  pop-ups and a long list of Finder, Dock and typing settings. It is
+  [RemoveMacAI](https://github.com/omlahore/RemoveMacAI), built in, in a window of its own.
+- Nothing changes until you have reviewed the list and clicked Apply, and every change can be
+  undone, singly or all at once. Locked settings go in one configuration profile that you
+  approve in System Settings; removing the profile undoes them. System Integrity Protection
+  stays on and nothing under `/System` is modified.
+- The sidebar shows how much space the models take, with a row that opens the window.
+  Recommendations offers the same as its first suggestion, and Scan > Debloat macOS
+  (⇧⌘D) opens it from the keyboard.
+- The window's title names the RemoveMacAI release inside and its date, so it is plain which
+  copy you are running.
+- One fix of Disker's own on top of RemoveMacAI 1.2.0-beta.1: its review list could leave
+  out a half-applied setting you had switched off, which Apply then undid anyway. The review
+  now lists it.
+
+### Updates
+
+- Apple changes what RemoveMacAI relies on with each macOS update, and RemoveMacAI ships fixes
+  every few days. Disker now takes those in daily, checked first by RemoveMacAI's own
+  self-test, and a fix reaches you in the next Disker release.
+- So that you hear about that release, Disker asks GitHub for the latest version when it
+  opens and shows a card in the sidebar when there is a newer one. It sends nothing but the
+  request, never offers a beta, and can be turned off in Settings. It is the only network
+  request Disker makes.
+
 ## v1.8 — 2026-09-20
 
 ### macOS 27

@@ -82,6 +82,13 @@ if [[ -f "Resources/AppIcon-Light.icns" ]]; then
     cp "Resources/AppIcon-Light.icns" "$APP_DIR/Contents/Resources/AppIcon.icns"
 fi
 
+# RemoveMacAI is compiled in, and its MIT licence (and pared's, in the notices) asks to
+# travel with every copy, so a downloaded Disker.app has to carry them, not just the source.
+echo "==> Copying RemoveMacAI's licences"
+mkdir -p "$APP_DIR/Contents/Resources/RemoveMacAI"
+cp Sources/RemoveMacAIKit/Upstream/LICENSE Sources/RemoveMacAIKit/Upstream/THIRD-PARTY-NOTICES.md \
+    "$APP_DIR/Contents/Resources/RemoveMacAI/"
+
 # --- Signing ----------------------------------------------------------------
 # Prefer the stable self-signed identity. Falling back to ad-hoc keeps the build working
 # out of the box, at the cost of Full Disk Access resetting on every rebuild.
