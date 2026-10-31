@@ -92,6 +92,9 @@ A change Disker genuinely needs from the engine belongs upstream as a pull reque
 upstream ships it, it goes in `Tools/removemacai-patches/` as a `.patch` against the
 upstream repository root, which the sync script applies after every checkout and lists in
 `Upstream/UPSTREAM`. When a patch stops applying, upstream has usually fixed it: delete it.
+Not every patch is headed upstream. `0002` is Disker's own wording for the review sheet,
+kept here by choice, so when it stops applying, upstream has rewritten that view: redo the
+change against the new code rather than deleting it.
 
 `.github/workflows/sync-removemacai.yml` runs that sync daily, then builds, tests and runs
 `Tools/check-removemacai.sh`. That script runs upstream's own self-test against the
