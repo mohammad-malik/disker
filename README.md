@@ -21,6 +21,9 @@ system setting, or you can pin one in Settings.</sub>
   they are to remove, with the risky ones marked for review rather than mixed in.
 - **One-button cleanup.** Hand the job to [Mole](https://github.com/tw93/mole) without leaving
   the window, or delete things yourself. Everything goes to the Trash, and ⌘Z puts it back.
+- **Debloat macOS.** Turn off Apple Intelligence and delete its models (often 6–7 GB), plus
+  analytics, ads and other extras, with [RemoveMacAI](https://github.com/omlahore/RemoveMacAI)
+  built in. You review every change first, and every change can be undone.
 
 ## Install
 
@@ -89,7 +92,7 @@ open build/Disker.app
 | --- | --- |
 | [Installing](docs/INSTALL.md) | Requirements, first launch, Full Disk Access, uninstalling |
 | [How it works](docs/ARCHITECTURE.md) | Architecture and implementation notes for contributors |
-| [Third-party software](docs/THIRD-PARTY.md) | Mole's licence and where the boundary sits |
+| [Third-party software](docs/THIRD-PARTY.md) | Mole and RemoveMacAI: licences and boundaries |
 | [Changelog](CHANGELOG.md) | What changed in each release |
 
 ## Status
