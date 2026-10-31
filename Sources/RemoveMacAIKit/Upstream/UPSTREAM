@@ -1,4 +1,4 @@
 repository: https://github.com/omlahore/RemoveMacAI
 ref: v1.2.0-beta.1
 commit: dad085044dd353f226be574d5361cc1ca11d09f8
-patches: 0001-review-sheet-includes-undone-tweaks.patch
+patches: 0001-review-sheet-includes-undone-tweaks.patch 0002-review-sheet-rows-read-as-a-list.patch
