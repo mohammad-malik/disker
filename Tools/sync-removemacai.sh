@@ -32,7 +32,7 @@ COMMIT="$(git -C "$WORK/src" rev-parse HEAD)"
 # copy is, and a sync that changes nothing must not make it look fresher.
 DATE="$(git -C "$WORK/src" log -1 --format=%cs)"
 
-# Fixes Disker needs before upstream ships them, each also sent upstream. Applied to the
+# Changes Disker needs that upstream has not shipped. Applied to the
 # clone, so the vendored copy is still exactly "this release plus these files". A patch
 # that no longer applies usually means upstream fixed it: delete the patch and sync again.
 PATCHES=()

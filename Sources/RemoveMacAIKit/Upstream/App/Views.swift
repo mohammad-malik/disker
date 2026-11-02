@@ -172,7 +172,7 @@ struct ReviewSheet: View {
             }
           }
           if !plan.apply.isEmpty {
-            Section("Turn on or off") {
+            Section("Will change") {
               ForEach(plan.apply) { t in ChangeRow(tweak: t, adding: true, showCommands: showCommands) }
             }
           }
@@ -248,7 +248,7 @@ struct ChangeRow: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 4) {
       HStack(spacing: 8) {
-        Image(systemName: adding ? "plus.circle.fill" : "arrow.uturn.backward.circle.fill")
+        Image(systemName: adding ? "checkmark" : "arrow.uturn.backward")
           .foregroundStyle(adding ? Color.accentColor : .orange)
         Text(tweak.title)
         if tweak.inProfile {
