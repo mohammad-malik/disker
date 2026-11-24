@@ -1,6 +1,8 @@
+diff --git a/Sources/removemacai/App/Views.swift b/Sources/removemacai/App/Views.swift
+index 77a159d..2877813 100644
 --- a/Sources/removemacai/App/Views.swift
 +++ b/Sources/removemacai/App/Views.swift
-@@ -172,7 +172,7 @@
+@@ -185,7 +185,7 @@ struct ReviewSheet: View {
              }
            }
            if !plan.apply.isEmpty {
@@ -9,12 +11,12 @@
                ForEach(plan.apply) { t in ChangeRow(tweak: t, adding: true, showCommands: showCommands) }
              }
            }
-@@ -248,7 +248,7 @@
+@@ -261,7 +261,7 @@ struct ChangeRow: View {
    var body: some View {
      VStack(alignment: .leading, spacing: 4) {
        HStack(spacing: 8) {
 -        Image(systemName: adding ? "plus.circle.fill" : "arrow.uturn.backward.circle.fill")
 +        Image(systemName: adding ? "checkmark" : "arrow.uturn.backward")
            .foregroundStyle(adding ? Color.accentColor : .orange)
-         Text(tweak.title)
+         Text(L(tweak.title))
          if tweak.inProfile {
