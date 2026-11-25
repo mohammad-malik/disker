@@ -1,13 +1,18 @@
 import Foundation
 
 enum Term {
-  static let color: Bool = {
-    let env = ProcessInfo.processInfo.environment
+  static func colorEnabled(env: [String: String] = ProcessInfo.processInfo.environment, tty: Bool) -> Bool {
     if env["NO_COLOR"] != nil { return false }
-    return env["CLICOLOR_FORCE"].map { $0 != "0" } ?? (isatty(STDOUT_FILENO) == 1)
-  }()
+    if let forced = env["CLICOLOR_FORCE"] { return forced != "0" }
+    return tty
+  }
 
-  static func paint(_ s: String, _ code: String) -> String { color ? "\u{1B}[\(code)m\(s)\u{1B}[0m" : s }
+  static let color: Bool = colorEnabled(tty: isatty(STDOUT_FILENO) == 1)
+  static let errColor: Bool = colorEnabled(tty: isatty(STDERR_FILENO) == 1)
+
+  static func paint(_ s: String, _ code: String, useColor: Bool) -> String { useColor ? "\u{1B}[\(code)m\(s)\u{1B}[0m" : s }
+  static func paint(_ s: String, _ code: String) -> String { paint(s, code, useColor: color) }
+  static func errPaint(_ s: String, _ code: String) -> String { paint(s, code, useColor: errColor) }
   static func bold(_ s: String) -> String { paint(s, "1") }
   static func dim(_ s: String) -> String { paint(s, "2") }
   static func green(_ s: String) -> String { paint(s, "32") }
@@ -16,7 +21,8 @@ enum Term {
 
   static func size(_ bytes: Int64) -> String {
     if bytes <= 0 { return "0 MB" }
-    if bytes >= 1_000_000_000 { return String(format: "%.1f GB", Double(bytes) / 1e9) }
+    // Anything that would round to "1000 MB" is shown in GB instead.
+    if bytes >= 999_500_000 { return String(format: "%.1f GB", Double(bytes) / 1e9) }
     return String(format: "%.0f MB", max(1, Double(bytes) / 1e6))
   }
 
@@ -33,7 +39,7 @@ enum Term {
   }
 
   static func fail(_ message: String) -> Never {
-    FileHandle.standardError.write(Data((red("error: ") + message + "\n").utf8))
+    FileHandle.standardError.write(Data((errPaint("error: ", "31") + message + "\n").utf8))
     exit(1)
   }
 }

@@ -13,12 +13,12 @@ struct InfoButton: View {
       Image(systemName: "info.circle").foregroundStyle(.secondary)
     }
     .buttonStyle(.plain)
-    .help(title)
-    .accessibilityLabel("About \(title)")
+    .help(L(title))
+    .accessibilityLabel("About \(L(title))")
     .popover(isPresented: $shown, arrowEdge: .bottom) {
       VStack(alignment: .leading, spacing: 6) {
-        Text(title).font(.headline)
-        Text(text).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        Text(L(title)).font(.headline)
+        Text(L(text)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
       }
       .padding(14)
       .frame(width: 300, alignment: .leading)
@@ -88,8 +88,8 @@ struct PromiseCard: View {
         .foregroundStyle(promise.tint)
         .frame(width: 28)
       VStack(alignment: .leading, spacing: 3) {
-        Text(promise.title).font(.headline)
-        Text(promise.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        Text(L(promise.title)).font(.headline)
+        Text(L(promise.detail)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
       }
       Spacer(minLength: 0)
     }
@@ -128,7 +128,7 @@ struct SafetyCard: View {
     }
   }
 
-  func check(_ text: String) -> some View {
+  func check(_ text: LocalizedStringKey) -> some View {
     Label {
       Text(text).foregroundStyle(.primary)
     } icon: {
@@ -160,12 +160,12 @@ struct SettingsGuide: View {
       .background(.quaternary.opacity(0.6))
       HStack(alignment: .top, spacing: 0) {
         VStack(alignment: .leading, spacing: 7) {
-          ForEach(["Wi-Fi", "Bluetooth", "Network"], id: \.self) { Text($0) }
+          ForEach(["Wi-Fi", "Bluetooth", "Network"], id: \.self) { Text(L($0)) }
           Text("General")
             .foregroundStyle(.white)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(RoundedRectangle(cornerRadius: 5).fill(Color.accentColor))
-          ForEach(["Appearance", "Privacy & Security"], id: \.self) { Text($0) }
+          ForEach(["Appearance", "Privacy & Security"], id: \.self) { Text(L($0)) }
         }
         .font(.caption)
         .padding(10)

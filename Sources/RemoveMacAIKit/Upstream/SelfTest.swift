@@ -1,4 +1,5 @@
 import Foundation
+import UAF
 
 /// Checks the parts that must never go wrong, runnable without Xcode:
 /// `removemacai selftest`. Touches nothing on the system.
@@ -12,6 +13,42 @@ func selfTest() -> Bool {
     do { try body() } catch is Failure { return true } catch { return false }
     return false
   }
+
+  check(unknownOption(in: ["RemoveMacAI.mobileconfig", "--bogus"]) == "--bogus"
+    && unknownOption(in: ["RemoveMacAI.mobileconfig", "analytics"]) == nil,
+    "export distinguishes unknown options from tweak names")
+  let invalidProfile = FileManager.default.temporaryDirectory
+    .appendingPathComponent("removemacai-export-selftest-\(UUID().uuidString).mobileconfig")
+  defer { try? FileManager.default.removeItem(at: invalidProfile) }
+  let executable = Bundle.main.executableURL?.path ?? CommandLine.arguments[0]
+  let invalidExport = Shell.run(executable, ["export", invalidProfile.path, "--bogus"])
+  let invalidExportOutput = invalidExport.output.replacingOccurrences(
+    of: #"\x1B\[[0-9;]*m"#, with: "", options: .regularExpression)
+  check(!invalidExport.ok && invalidExportOutput.contains("error: unknown option --bogus")
+    && !FileManager.default.fileExists(atPath: invalidProfile.path),
+    "export rejects unknown options without writing a profile")
+  let featuresJSON = Shell.run(executable, ["features", "--json"])
+  let featureRows = (try? JSONSerialization.jsonObject(with: Data(featuresJSON.output.utf8)) as? [[String: String]]) ?? []
+  check(featuresJSON.ok && featureRows.count == Catalog.availableFeatures.count
+    && featureRows.allSatisfy { Set($0.keys) == ["id", "title"] }
+    && Set(featureRows.compactMap { $0["id"] }) == Set(Catalog.availableFeatures.map(\.id)),
+    "features --json lists each feature's id and title for scripts")
+
+  check(unknownCommandMessage("stauts") == "unknown command \"stauts\". Did you mean \"status\"?"
+    && unknownCommandMessage("xyzzy") == "unknown command \"xyzzy\"",
+    "an unknown command names the typo and only suggests a close match")
+  let unknownCommand = Shell.run(executable, ["stauts"])
+  let unknownCommandOutput = unknownCommand.output.replacingOccurrences(
+    of: #"\x1B\[[0-9;]*m"#, with: "", options: .regularExpression)
+  check(unknownCommand.status == 1 && unknownCommandOutput.contains("error: unknown command \"stauts\"")
+    && unknownCommandOutput.contains("Did you mean \"status\"?"),
+    "an unknown command fails naming the typo instead of printing bare usage")
+  let unknownAction = Shell.run(executable, ["background", "of"])
+  let unknownActionOutput = unknownAction.output.replacingOccurrences(
+    of: #"\x1B\[[0-9;]*m"#, with: "", options: .regularExpression)
+  check(unknownAction.status == 1
+    && unknownActionOutput.trimmingCharacters(in: .whitespacesAndNewlines) == "error: unknown action \"of\", use off or on",
+    "background fails on an unknown action instead of listing items")
 
   check(Set(Catalog.setsToRemove(keeping: [])) == Set(Catalog.availableModelSets.map(\.name)),
     "off removes every model set this macOS has")
@@ -38,6 +75,11 @@ func selfTest() -> Bool {
     userInfo: [NSLocalizedDescriptionKey: "Could not eliminate as there are current locks", "currentLockUsage": [:]])
   check(Models.isLocked(lockError), "the asset service's lock error is recognised")
   check(!Models.isLocked(NSError(domain: "com.apple.UnifiedAssetFramework", code: -1)), "other errors are not taken for a lock")
+  check(UAFRefusedConnection(NSError(domain: NSCocoaErrorDomain, code: NSXPCConnectionInterrupted))
+    && UAFRefusedConnection(NSError(domain: NSCocoaErrorDomain, code: NSXPCConnectionInvalid))
+    && !UAFRefusedConnection(lockError) && !UAFRefusedConnection(nil)
+    && !UAFRefusedConnection(NSError(domain: NSCocoaErrorDomain, code: NSXPCConnectionReplyInvalid)),
+    "a refused asset service connection is sent again through siriknowledged, other errors are not")
   var attempts = 0
   var waits: [TimeInterval] = []
   let cleared = Models.retrying({ attempts += 1; return attempts < 3 ? .locked : .done }, delays: [5, 15]) { waits.append($0) }
@@ -194,6 +236,46 @@ func selfTest() -> Bool {
   } catch {
     check(false, "the profile builds: \(error)")
   }
+
+  do {
+    check(Mobile.Device(argument: "ios") == .iPhone && Mobile.Device(argument: "ipados") == .iPad
+      && Mobile.Device(argument: "phone") == nil,
+      "iphone and ipad profile targets accept the OS names")
+    check(Set(Mobile.features.map(\.id)).count == Mobile.features.count, "iPhone and iPad feature names are unique")
+    let phone = try PropertyListSerialization.propertyList(from: Mobile.data(keeping: [], device: .iPhone), format: nil) as! [String: Any]
+    let pad = try PropertyListSerialization.propertyList(from: Mobile.data(keeping: ["writing-tools"], device: .iPad), format: nil) as! [String: Any]
+    check(phone["PayloadScope"] == nil && pad["PayloadScope"] == nil
+      && phone["PayloadRemovalDisallowed"] as? Bool == false,
+      "an iPhone or iPad profile is removable and is not a Mac system profile")
+    let phonePayloads = phone["PayloadContent"] as! [[String: Any]]
+    let padPayloads = pad["PayloadContent"] as! [[String: Any]]
+    let phoneRestrictions = phonePayloads[0]
+    let padRestrictions = padPayloads[0]
+    check(phonePayloads.count == 1 && phonePayloads[0]["PayloadType"] as? String == "com.apple.applicationaccess"
+      && padPayloads.count == 1,
+      "an iPhone profile carries restrictions only, with no Mac preference payloads")
+    check(phoneRestrictions["allowWritingTools"] as? Bool == false
+      && phoneRestrictions["allowAssistant"] as? Bool == false
+      && phoneRestrictions["allowSiriAI"] as? Bool == false
+      && phoneRestrictions["allowImageWand"] as? Bool == false
+      && phoneRestrictions["allowVisualIntelligenceSummary"] as? Bool == false
+      && phoneRestrictions["allowDiagnosticSubmission"] == nil,
+      "an iPhone profile turns Writing Tools, Siri, Image Wand, and Visual Intelligence summaries off")
+    check(padRestrictions["allowWritingTools"] == nil
+      && padRestrictions["allowGenmoji"] as? Bool == false
+      && padRestrictions["allowImageWand"] as? Bool == false
+      && padRestrictions["allowExternalIntelligenceIntegrations"] as? Bool == false
+      && padRestrictions["allowVisualIntelligenceSummary"] as? Bool == false,
+      "a kept iPad feature is left alone and iPad turns Visual Intelligence summaries off")
+    let phoneDescription = phone["PayloadDescription"] as? String ?? ""
+    check(phoneDescription.contains("Mail can still write them on its own")
+      && phoneDescription.contains("Visual Intelligence summaries")
+      && phoneDescription.contains("Shared iPad ignores them")
+      && !phoneDescription.contains("any device"),
+      "the profile names its Mail and Visual Intelligence limits and does not promise Siri AI on Shared iPad")
+  } catch {
+    check(false, "the iPhone and iPad profiles build: \(error)")
+  }
   // The debloater catalog.
   check(Set(Tweaks.all.map(\.id)).count == Tweaks.all.count, "tweak names are unique")
   let changeKeys = Tweaks.all.flatMap { $0.changes.map(\.key) }
@@ -250,13 +332,68 @@ func selfTest() -> Bool {
   let helper = BackgroundItem(label: "dev.orbstack.OrbStack.privhelper", plist: "",
     program: "/Library/PrivilegedHelperTools/dev.orbstack.OrbStack.privhelper", system: true)
   check(script.owner == "sync.sh" && helper.owner == "OrbStack", "background items are named after what they run")
+  let goneApp = BackgroundItem(label: "com.example.gone", plist: "", program: "/Applications/Gone-\(UUID().uuidString).app/Contents/MacOS/helper", system: false)
+  let goneScript = BackgroundItem(label: "com.example.gone-script", plist: "", program: "/bin/bash",
+    arguments: ["/bin/bash", "/nonexistent-\(UUID().uuidString)/sync.sh"], system: false)
+  let present = BackgroundItem(label: "com.example.present", plist: "", program: "/bin/bash",
+    arguments: ["/bin/bash", "/bin/sh"], system: false)
+  let bare = BackgroundItem(label: "com.example.bare", plist: "", program: "helper", system: false)
+  check(goneApp.isLeftover && goneScript.isLeftover && !present.isLeftover && !bare.isLeftover,
+    "a background item is left over only when what it runs is gone")
+  let inline = BackgroundItem(label: "com.example.inline", plist: "", program: "/bin/bash",
+    arguments: ["/bin/bash", "-c", "echo ok", "/nonexistent-\(UUID().uuidString)"], system: false)
+  let inlineScript = BackgroundItem(label: "com.example.inline-script", plist: "", program: "/bin/sh",
+    arguments: ["/bin/sh", "-c", "/bin/sh --version"], system: false)
+  let optioned = BackgroundItem(label: "com.example.optioned", plist: "", program: "/bin/zsh",
+    arguments: ["/bin/zsh", "-l", "/nonexistent-\(UUID().uuidString)/sync.sh"], system: false)
+  check(!inline.isLeftover && !inlineScript.isLeftover && optioned.isLeftover,
+    "a command run with -c is never judged left over, and options before a script are skipped")
+  let locked = FileManager.default.temporaryDirectory.appendingPathComponent("removemacai-locked-\(UUID().uuidString)")
+  try? FileManager.default.createDirectory(at: locked, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o000])
+  defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: locked.path); try? FileManager.default.removeItem(at: locked) }
+  check(!BackgroundItem.confirmedMissing(locked.appendingPathComponent("helper").path)
+    && BackgroundItem.confirmedMissing("/nonexistent-\(UUID().uuidString)/helper"),
+    "a path RemoveMacAI can't look into doesn't count as missing")
 
   let ranAll = Shell.run("/bin/sh", ["-c", Shell.adminScript(["false", "echo second"])])
   check(!ranAll.ok && ranAll.output.contains("second"), "one failed administrator step doesn't skip the rest")
   let exited = Shell.run("/bin/sh", ["-c", Shell.adminScript(["exit 3", "echo after-exit"])])
   check(!exited.ok && exited.output.contains("after-exit"), "a step that exits doesn't stop the rest")
+  let toolFolder = FileManager.default.temporaryDirectory.appendingPathComponent("removemacai-cli-\(UUID().uuidString)")
+  defer { try? FileManager.default.removeItem(at: toolFolder) }
+  let toolLink = toolFolder.appendingPathComponent("bin/removemacai").path
+  let binary = "/Applications/Remove Mac AI's.app/Contents/MacOS/RemoveMacAI"
+  let linked = Shell.run("/bin/sh", ["-c", Shell.adminScript(CommandLineTool.commands(linking: binary, at: toolLink))])
+  let relinked = Shell.run("/bin/sh", ["-c", Shell.adminScript(CommandLineTool.commands(linking: binary, at: toolLink))])
+  check(linked.ok && relinked.ok && (try? FileManager.default.destinationOfSymbolicLink(atPath: toolLink)) == binary,
+    "the command line tool links to the app, even from a path with spaces and quotes")
+  let toolFile = toolFolder.appendingPathComponent("bin/other").path
+  FileManager.default.createFile(atPath: toolFile, contents: Data("keep".utf8))
+  let refused = Shell.run("/bin/sh", ["-c", Shell.adminScript(CommandLineTool.commands(linking: binary, at: toolFile))])
+  check(!refused.ok && refused.output.contains("isn't a link") && (try? String(contentsOfFile: toolFile, encoding: .utf8)) == "keep",
+    "the command line tool never replaces a file that isn't a link")
   check(Shell.run("/bin/sh", ["-c", Shell.adminScript(["true", "true"])]).ok, "administrator steps succeed together")
+  check(Updates.isNewer("1.2.0", than: "1.2.0-beta.1") && !Updates.isNewer("1.1.4", than: "1.2.0-beta.1")
+    && Updates.isNewer("1.2.0-beta.10", than: "1.2.0-beta.9") && !Updates.isNewer("1.2.0-beta.1", than: "1.2.0")
+    && Updates.isNewer("1.10.0", than: "1.9.9") && !Updates.isNewer("1.1.4", than: "1.1.4"),
+    "update checks treat a beta as older than its release and compare numbers as numbers")
+  check(Updates.isVersion("1.2.0") && Updates.isVersion("1.2.0-beta.1") && !Updates.isVersion("")
+    && !Updates.isVersion("latest") && !Updates.isVersion("1.2.") && !Updates.isNewer("", than: "1.2.0"),
+    "an update check only accepts version numbers, and an empty one can't crash it")
   check(Term.pad("abc", 5) == "abc  " && Term.pad("abcdef", 5) == "abcdef ", "columns never run together")
+  check(Term.colorEnabled(env: [:], tty: true) && !Term.colorEnabled(env: [:], tty: false),
+    "color follows the terminal when neither NO_COLOR nor CLICOLOR_FORCE is set")
+  check(!Term.colorEnabled(env: ["NO_COLOR": ""], tty: true)
+    && !Term.colorEnabled(env: ["NO_COLOR": "", "CLICOLOR_FORCE": "1"], tty: true),
+    "NO_COLOR turns color off, even when forced or on a terminal")
+  check(Term.colorEnabled(env: ["CLICOLOR_FORCE": "1"], tty: false)
+    && !Term.colorEnabled(env: ["CLICOLOR_FORCE": "0"], tty: true),
+    "CLICOLOR_FORCE turns color on and off regardless of the terminal")
+  check(Term.paint("x", "31", useColor: true).contains("\u{1B}[31m") && !Term.paint("x", "31", useColor: false).contains("\u{1B}"),
+    "stderr text is only colored when its own stream allows it")
+  check(Term.size(999_999_999) == "1.0 GB" && Term.size(999_500_000) == "1.0 GB"
+    && Term.size(999_499_999) == "999 MB" && Term.size(1_000_000_000) == "1.0 GB"
+    && Term.size(5_000_000) == "5 MB", "sizes that round to 1000 MB are shown in GB")
   check(Storage.isAppleCache("/x/com.apple.Safari") && Storage.isAppleCache("/x/CloudKit")
     && Storage.isAppleCache("/x/GeoServices") && !Storage.isAppleCache("/x/Homebrew")
     && !Storage.isAppleCache("/x/com.google.Chrome"), "macOS caches without the com.apple. prefix are left alone")
@@ -417,6 +554,16 @@ func selfTest() -> Bool {
     check(model.pendingTweaks.map(\.tweak.id) == [partialTweak.id] && model.pendingTweaks.first?.apply == false,
       "switching a partly applied tweak on and off undoes it")
   }
+
+  let macUpdate: [String: Any] = ["Display Name": "macOS 27.2", "Display Version": "27.2"]
+  let toolsUpdate: [String: Any] = ["Display Name": "Command Line Tools for Xcode 27.2", "Display Version": "27.2"]
+  check(PendingUpdate.name(in: ["RecommendedUpdates": [toolsUpdate, macUpdate]], running: "27.0") == "macOS 27.2",
+    "a pending macOS update is found among other updates")
+  check(PendingUpdate.name(in: ["RecommendedUpdates": [toolsUpdate]], running: "27.0") == nil
+    && PendingUpdate.name(in: ["RecommendedUpdates": [macUpdate]], running: "27.2") == nil
+    && PendingUpdate.name(in: [:], running: "27.0") == nil,
+    "other updates, the running version and an empty list don't count as a pending macOS update")
+  check(PendingUpdate.slowedBy(Profile.Installed()) == nil, "no update warning without the profile")
 
   print(failed == 0 ? Term.green("all checks passed") : Term.red("\(failed) failed"))
   return failed == 0

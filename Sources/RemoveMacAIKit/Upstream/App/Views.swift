@@ -47,28 +47,39 @@ struct Sidebar: View {
     @Bindable var model = model
     List(selection: $model.page) {
       row(.overview)
-      Section("Turn Off") {
+      if model.showMoreTools {
+        Section("Turn Off") {
+          row(.intelligence, badge: model.aiPending ? Text("1") : nil)
+          ForEach([TweakGroup.privacy, .annoyances, .apps], id: \.self) { group in
+            row(.group(group), badge: count(group))
+          }
+          row(.background)
+        }
+        Section("Customize") {
+          ForEach([TweakGroup.finder, .windows, .typing], id: \.self) { group in
+            row(.group(group), badge: count(group))
+          }
+        }
+        Section("Clean Up") {
+          row(.storage)
+          row(.changes)
+        }
+      } else {
         row(.intelligence, badge: model.aiPending ? Text("1") : nil)
-        ForEach([TweakGroup.privacy, .annoyances, .apps], id: \.self) { group in
-          row(.group(group), badge: count(group))
-        }
-        row(.background)
-      }
-      Section("Customize") {
-        ForEach([TweakGroup.finder, .windows, .typing], id: \.self) { group in
-          row(.group(group), badge: count(group))
-        }
-      }
-      Section("Clean Up") {
-        row(.storage)
         row(.changes)
       }
     }
     .listStyle(.sidebar)
     .safeAreaInset(edge: .bottom, spacing: 0) {
-      Button { model.openWelcome() } label: {
-        Label("How RemoveMacAI Works", systemImage: "questionmark.circle")
-          .frame(maxWidth: .infinity, alignment: .leading)
+      VStack(alignment: .leading, spacing: 10) {
+        Button { model.setMoreTools(!model.showMoreTools) } label: {
+          Label(model.showMoreTools ? "Hide More Tools" : "Show More Tools", systemImage: "square.grid.2x2")
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        Button { model.openWelcome() } label: {
+          Label("How RemoveMacAI Works", systemImage: "questionmark.circle")
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
       }
       .buttonStyle(.plain)
       .foregroundStyle(.secondary)
@@ -78,7 +89,7 @@ struct Sidebar: View {
   }
 
   func row(_ page: Page, badge: Text? = nil) -> some View {
-    Label(page.title, systemImage: page.symbol)
+    Label(L(page.title), systemImage: page.symbol)
       .badge(badge)
       .tag(page)
   }
@@ -133,7 +144,7 @@ struct ReviewSheet: View {
         if let plan {
           HStack(spacing: 8) {
             if !plan.models.isEmpty, let bytes = model.modelBytes(plan.models), bytes > 0 {
-              chip("Frees about \(Term.size(bytes))", color: .green)
+              chip("Frees about \(UISize.of(bytes))", color: .green)
             }
             chip("Undo any time", color: .accentColor)
             if plan.profile.map({ !$0.isEmpty }) ?? false {
@@ -152,7 +163,9 @@ struct ReviewSheet: View {
             Section("Apple Intelligence") {
               if model.aiPending, let kept = model.targetAI {
                 Label(
-                  kept.isEmpty ? "Turn off every feature" : "Turn off everything except \(kept.count) kept feature\(kept.count == 1 ? "" : "s")",
+                  kept.isEmpty
+                    ? "Turn off every feature"
+                    : kept.count == 1 ? "Turn off everything except 1 kept feature" : "Turn off everything except \(kept.count) kept features",
                   systemImage: "apple.intelligence")
               } else if model.aiPending {
                 Label("Turn Apple Intelligence back on. macOS downloads its models again when a feature needs them.", systemImage: "arrow.uturn.backward")
@@ -161,7 +174,7 @@ struct ReviewSheet: View {
                 let bytes = model.modelBytes(plan.models)
                 Label {
                   HStack {
-                    Text(bytes.map { $0 > 0 ? "Delete the models, about \(Term.size($0))" : "Ask macOS to finish removing leftover model files" } ?? "Delete the models")
+                    Text(bytes.map { $0 > 0 ? String(localized: "Delete the models, about \(UISize.of($0))") : L("Ask macOS to finish removing leftover model files") } ?? L("Delete the models"))
                     Spacer()
                     Text("macOS can download them again").font(.caption).foregroundStyle(.secondary)
                   }
@@ -224,7 +237,7 @@ struct ReviewSheet: View {
     }
   }
 
-  func chip(_ text: String, color: Color) -> some View {
+  func chip(_ text: LocalizedStringKey, color: Color) -> some View {
     Text(text)
       .font(.caption.weight(.semibold))
       .foregroundStyle(color == .secondary ? Color.secondary : color)
@@ -232,7 +245,7 @@ struct ReviewSheet: View {
       .background(Capsule().fill(color.opacity(0.13)))
   }
 
-  func step(_ n: Int, _ text: String) -> some View {
+  func step(_ n: Int, _ text: LocalizedStringKey) -> some View {
     HStack(alignment: .firstTextBaseline, spacing: 10) {
       StepBadge(number: n)
       Text(text).fixedSize(horizontal: false, vertical: true)
@@ -250,7 +263,7 @@ struct ChangeRow: View {
       HStack(spacing: 8) {
         Image(systemName: adding ? "checkmark" : "arrow.uturn.backward")
           .foregroundStyle(adding ? Color.accentColor : .orange)
-        Text(tweak.title)
+        Text(L(tweak.title))
         if tweak.inProfile {
           Image(systemName: "lock.fill").font(.caption).foregroundStyle(.secondary)
             .help("Kept in place by the RemoveMacAI profile")
@@ -284,7 +297,7 @@ struct RunSheet: View {
       case .working(let text)?:
         VStack(spacing: 16) {
           ProgressView().controlSize(.large)
-          Text(text).font(.headline)
+          Text(L(text)).font(.headline)
           Text("This takes a few seconds.").foregroundStyle(.secondary)
         }
         .padding(40)
@@ -350,7 +363,9 @@ struct ApproveProfileView: View {
         }
       }
       DisclosureGroup("Something went wrong", isExpanded: $showTrouble) {
-        Text("If System Settings says the profile couldn't be \(remove ? "removed" : "installed"), click Cancel here. Your Mac stays as it was, and you can report it on GitHub with Help › Report a Problem.")
+        Text(remove
+          ? "If System Settings says the profile couldn't be removed, click Cancel here. Your Mac stays as it was, and you can report it on GitHub with Help › Report a Problem."
+          : "If System Settings says the profile couldn't be installed, click Cancel here. Your Mac stays as it was, and you can report it on GitHub with Help › Report a Problem.")
           .font(.callout)
           .foregroundStyle(.secondary)
           .fixedSize(horizontal: false, vertical: true)
@@ -369,7 +384,7 @@ struct ApproveProfileView: View {
     .fixedSize(horizontal: false, vertical: true)
   }
 
-  func stepRow(_ n: Int, _ title: String, _ detail: String?, active: Bool, done: Bool = false) -> some View {
+  func stepRow(_ n: Int, _ title: LocalizedStringKey, _ detail: LocalizedStringKey?, active: Bool, done: Bool = false) -> some View {
     HStack(alignment: .top, spacing: 10) {
       StepBadge(number: n, done: done, active: active)
       VStack(alignment: .leading, spacing: 2) {
@@ -401,14 +416,14 @@ struct FinishedView: View {
       .accessibilityHidden(true)
       Text(problems.isEmpty ? "All done" : "Finished, with a few problems").font(.title2.weight(.bold))
       if let freed, freed > 0 {
-        Text("Deleted \(Term.size(freed)) of Apple Intelligence models. macOS clears the files on its own schedule, so Storage settings may show the old size for a while.")
+        Text("Deleted \(UISize.of(freed)) of Apple Intelligence models. macOS clears the files on its own schedule, so Storage settings may show the old size for a while.")
           .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 420)
           .fixedSize(horizontal: false, vertical: true)
       }
       if !problems.isEmpty {
         ScrollView {
           VStack(alignment: .leading, spacing: 6) {
-            ForEach(problems, id: \.self) { Text("• " + $0).textSelection(.enabled) }
+            ForEach(problems, id: \.self) { Text("• " + localizedMessage($0)).textSelection(.enabled) }
           }
           .frame(maxWidth: .infinity, alignment: .leading)
         }

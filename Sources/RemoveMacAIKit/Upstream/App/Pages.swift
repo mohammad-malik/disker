@@ -9,48 +9,8 @@ struct OverviewView: View {
     ScrollView {
       VStack(alignment: .leading, spacing: 18) {
         StatusHero()
-        HStack(spacing: 12) {
-          StatTile(title: "Settings changed", value: "\(model.appliedCount) of \(model.availableCount)", link: model.appliedCount > 0 ? "See which ones" : "Browse settings") {
-            model.page = .group(TweakGroup.allCases.first { model.switchedOn(in: $0).on > 0 } ?? .privacy)
-          }
-          StatTile(title: "Apps running in the background", value: model.background.isEmpty ? "None" : "\(model.background.count)", link: "See what they are") {
-            model.page = .background
-          }
-          StatTile(
-            title: "Space you can get back",
-            value: model.scanned ? Term.size(model.storage.reduce(0) { $0 + $1.bytes }) : "Not checked",
-            link: model.scanned ? "Old installers and caches" : "Check now"
-          ) {
-            model.page = .storage
-            if !model.scanned && !model.scanning { model.scan() }
-          }
-        }
-        VStack(alignment: .leading, spacing: 10) {
-          Text("Or start with a preset").font(.headline)
-          VStack(spacing: 0) {
-            ForEach(Array(Preset.allCases.enumerated()), id: \.element) { i, preset in
-              if i > 0 { Divider().padding(.leading, 56) }
-              HStack(alignment: .top, spacing: 14) {
-                Image(systemName: preset == .recommended ? "checkmark.seal" : "hand.raised")
-                  .font(.title2).foregroundStyle(.tint).frame(width: 28)
-                VStack(alignment: .leading, spacing: 3) {
-                  Text(preset.title).font(.headline)
-                  Text(preset.summary).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                  Text("\(Tweaks.preset(preset).count) settings and Apple Intelligence off")
-                    .font(.caption).foregroundStyle(.tertiary)
-                }
-                Spacer()
-                Button("Review…") {
-                  model.choose(preset)
-                  model.reviewing = true
-                }
-              }
-              .padding(14)
-            }
-          }
-          .card()
-          Footer("A preset adds to what's already applied and changes nothing until you review it.")
-        }
+        if let update = model.slowedUpdate { UpdateNotice(name: update) }
+        if model.showMoreTools { tools } else { moreTools }
         SafetyCard { model.openWelcome() }
           .padding(16)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -65,6 +25,90 @@ struct OverviewView: View {
       .frame(maxWidth: .infinity)
     }
     .navigationTitle("Overview")
+  }
+
+  var moreTools: some View {
+    HStack(alignment: .top, spacing: 14) {
+      Image(systemName: "square.grid.2x2")
+        .font(.title2).foregroundStyle(.tint).frame(width: 28)
+        .accessibilityHidden(true)
+      VStack(alignment: .leading, spacing: 3) {
+        Text("More tools, if you want them").font(.headline)
+        Text("Stop analytics and ads, quiet the pop-ups, change Finder and Dock settings, switch off other apps' background items and get disk space back. You don't need any of it to remove Apple Intelligence.")
+          .foregroundStyle(.secondary)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      Spacer()
+      Button("Show More Tools") { model.setMoreTools(true) }
+    }
+    .padding(16)
+    .card()
+  }
+
+  @ViewBuilder
+  var tools: some View {
+    HStack(spacing: 12) {
+      StatTile(title: "Settings changed", value: String(localized: "\(model.appliedCount) of \(model.availableCount)"), link: model.appliedCount > 0 ? "See which ones" : "Browse settings") {
+        model.page = .group(TweakGroup.allCases.first { model.switchedOn(in: $0).on > 0 } ?? .privacy)
+      }
+      StatTile(title: "Apps running in the background", value: model.background.isEmpty ? L("None") : "\(model.background.count)", link: "See what they are") {
+        model.page = .background
+      }
+      StatTile(
+        title: "Space you can get back",
+        value: model.scanned ? UISize.of(model.storage.reduce(0) { $0 + $1.bytes }) : L("Not checked"),
+        link: model.scanned ? "Old installers and caches" : "Check now"
+      ) {
+        model.page = .storage
+        if !model.scanned && !model.scanning { model.scan() }
+      }
+    }
+    VStack(alignment: .leading, spacing: 10) {
+      Text("Or start with a preset").font(.headline)
+      VStack(spacing: 0) {
+        ForEach(Array(Preset.allCases.enumerated()), id: \.element) { i, preset in
+          if i > 0 { Divider().padding(.leading, 56) }
+          HStack(alignment: .top, spacing: 14) {
+            Image(systemName: preset == .recommended ? "checkmark.seal" : "hand.raised")
+              .font(.title2).foregroundStyle(.tint).frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+              Text(L(preset.title)).font(.headline)
+              Text(L(preset.summary)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+              Text("\(Tweaks.preset(preset).count) settings and Apple Intelligence off")
+                .font(.caption).foregroundStyle(.tertiary)
+            }
+            Spacer()
+            Button("Review…") {
+              model.choose(preset)
+              model.reviewing = true
+            }
+          }
+          .padding(14)
+        }
+      }
+      .card()
+      Footer("A preset adds to what's already applied and changes nothing until you review it.")
+    }
+  }
+}
+
+/// A macOS update is waiting, and its download will stop on the models the profile blocks.
+struct UpdateNotice: View {
+  let name: String
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 6) {
+      Label("\(name) may look stuck while it downloads", systemImage: "exclamationmark.triangle")
+        .font(.headline)
+      Text("Software Update keeps retrying the models RemoveMacAI blocks. After about 2 hours with your Mac awake, it carries on by itself. To skip the wait, turn Apple Intelligence back on here, restart, update, then turn it off again.")
+        .foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      Link("Read more on GitHub", destination: URL(string: "https://github.com/omlahore/RemoveMacAI/issues/109")!)
+        .font(.callout)
+    }
+    .padding(16)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .card()
   }
 }
 
@@ -95,7 +139,7 @@ struct StatusHero: View {
       if !off && model.modelTotal > 0, let disk = DiskSize.total {
         ProgressView(value: Double(model.modelTotal), total: Double(max(disk, model.modelTotal)))
           .tint(.orange)
-          .accessibilityLabel("\(Term.size(model.modelTotal)) of models out of \(Term.size(disk)) of storage")
+          .accessibilityLabel("\(UISize.of(model.modelTotal)) of models out of \(UISize.of(disk)) of storage")
       }
       HStack(spacing: 10) {
         if off {
@@ -105,11 +149,19 @@ struct StatusHero: View {
           }
           Button("Change What's Kept On") { model.page = .intelligence }
         } else {
-          Button("Turn Off with Recommended Settings…") {
-            model.choose(.recommended)
-            model.reviewing = true
+          if model.showMoreTools {
+            Button("Turn Off with Recommended Settings…") {
+              model.choose(.recommended)
+              model.reviewing = true
+            }
+            .buttonStyle(.borderedProminent)
+          } else {
+            Button("Turn Off Apple Intelligence…") {
+              model.chooseAppleIntelligence()
+              model.reviewing = true
+            }
+            .buttonStyle(.borderedProminent)
           }
-          .buttonStyle(.borderedProminent)
           Button("Choose What to Turn Off") { model.page = .intelligence }
           Text("You'll see every change first.").font(.callout).foregroundStyle(.secondary)
         }
@@ -121,21 +173,25 @@ struct StatusHero: View {
   }
 
   var subtitle: String {
-    if model.loadingModels { return "Checking how much space its models take…" }
+    if model.loadingModels { return String(localized: "Checking how much space its models take…") }
     if off {
-      if model.modelTotal > 0 { return "\(Term.size(model.modelTotal)) of models are still on disk. macOS won't download more." }
-      if let kept = model.currentAI, !kept.isEmpty { return "\(kept.count) feature\(kept.count == 1 ? " is" : "s are") kept on. Everything else is off and its models are gone." }
-      return "Its models are gone and macOS won't download them again."
+      if model.modelTotal > 0 { return String(localized: "\(UISize.of(model.modelTotal)) of models are still on disk. macOS won't download more.") }
+      if let kept = model.currentAI, !kept.isEmpty {
+        return kept.count == 1
+          ? String(localized: "1 feature is kept on. Everything else is off and its models are gone.")
+          : String(localized: "\(kept.count) features are kept on. Everything else is off and its models are gone.")
+      }
+      return String(localized: "Its models are gone and macOS won't download them again.")
     }
-    if model.modelTotal > 0 { return "Its models take \(Term.size(model.modelTotal)) on this Mac, whether you use them or not." }
-    return "Its features are on. RemoveMacAI can turn off the ones you don't use."
+    if model.modelTotal > 0 { return String(localized: "Its models take \(UISize.of(model.modelTotal)) on this Mac, whether you use them or not.") }
+    return String(localized: "Its features are on. RemoveMacAI can turn off the ones you don't use.")
   }
 }
 
 struct StatTile: View {
-  let title: String
+  let title: LocalizedStringKey
   let value: String
-  let link: String
+  let link: LocalizedStringKey
   let action: () -> Void
 
   var body: some View {
@@ -202,11 +258,11 @@ struct IntelligenceView: View {
           )) {
             VStack(alignment: .leading, spacing: 2) {
               HStack(spacing: 6) {
-                Text(feature.title)
-                Text(stateText(feature.id)).font(.caption).foregroundStyle(.secondary)
+                Text(L(feature.title))
+                Text(L(stateText(feature.id))).font(.caption).foregroundStyle(.secondary)
               }
               if let blurb = FeatureBlurbs.text[feature.id] {
-                Text(blurb).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(L(blurb)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
               }
             }
           }
@@ -229,12 +285,12 @@ struct IntelligenceView: View {
           Text("Apple's asset service didn't answer, so the sizes are unknown.").foregroundStyle(.secondary)
         } else {
           ForEach(Catalog.availableModelSets, id: \.name) { set in
-            LabeledContent(set.title) {
+            LabeledContent(L(set.title)) {
               let bytes = model.modelBytes[set.name] ?? 0
-              Text(bytes > 0 ? Term.size(bytes) : "None").foregroundStyle(bytes > 0 ? .primary : .secondary)
+              Text(bytes > 0 ? UISize.of(bytes) : L("None")).foregroundStyle(bytes > 0 ? .primary : .secondary)
             }
           }
-          LabeledContent("Total") { Text(Term.size(model.modelTotal)).fontWeight(.semibold) }
+          LabeledContent("Total") { Text(UISize.of(model.modelTotal)).fontWeight(.semibold) }
           if model.currentAI != nil && model.modelTotal > 0 {
             HStack {
               Text("Apple Intelligence is off, but these models are still on disk.").foregroundStyle(.secondary)
@@ -279,7 +335,7 @@ struct TweakGroupView: View {
       Section {
         ForEach(tweaks) { TweakRow(tweak: $0) }
       } header: {
-        Text(group.summary).font(.body).foregroundStyle(.secondary).textCase(nil)
+        Text(L(group.summary)).font(.body).foregroundStyle(.secondary).textCase(nil)
       } footer: {
         if tweaks.contains(where: \.inProfile) {
           HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -290,7 +346,7 @@ struct TweakGroupView: View {
       }
     }
     .formStyle(.grouped)
-    .navigationTitle(group.title)
+    .navigationTitle(L(group.title))
     .toolbar {
       ToolbarItem {
         Menu {
@@ -324,18 +380,18 @@ struct TweakRow: View {
     Toggle(isOn: Binding(get: { wanted }, set: { model.toggle(tweak, $0) })) {
       VStack(alignment: .leading, spacing: 3) {
         HStack(spacing: 6) {
-          Text(tweak.title)
+          Text(L(tweak.title))
           if tweak.inProfile {
             Image(systemName: "lock.fill").font(.caption2).foregroundStyle(.tertiary)
               .help("Kept in place by the RemoveMacAI profile")
           }
           if let note = pendingNote(state: state, wanted: wanted, undoes: model.undoes(tweak)) {
-            Text(note).font(.caption.weight(.medium)).foregroundStyle(.tint)
+            Text(L(note)).font(.caption.weight(.medium)).foregroundStyle(.tint)
           }
         }
-        Text(tweak.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        Text(L(tweak.detail)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         if let caveat = tweak.caveat {
-          Label(caveat, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
+          Label(L(caveat), systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
         }
         if state == .managed {
           Text("Managed by another profile on this Mac.").font(.caption).foregroundStyle(.secondary)
@@ -362,6 +418,7 @@ struct TweakRow: View {
 
 struct BackgroundView: View {
   @Environment(AppModel.self) private var model
+  @State private var trashing: BackgroundItem?
 
   var body: some View {
     Form {
@@ -370,27 +427,36 @@ struct BackgroundView: View {
           Text("No background items from other apps.").foregroundStyle(.secondary)
         }
         ForEach(model.background) { item in
-          Toggle(isOn: Binding(
-            get: { !model.backgroundOff.contains(item.id) },
-            set: { model.setBackground(item, off: !$0) }
-          )) {
-            VStack(alignment: .leading, spacing: 2) {
-              HStack(spacing: 6) {
-                Text(item.owner)
-                if item.system {
-                  Text("All users").font(.caption2.weight(.medium)).padding(.horizontal, 5).padding(.vertical, 1)
-                    .background(Capsule().fill(.quaternary))
+          HStack(spacing: 10) {
+            Toggle(isOn: Binding(
+              get: { !model.backgroundOff.contains(item.id) },
+              set: { model.setBackground(item, off: !$0) }
+            )) {
+              VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                  Text(item.owner)
+                  if item.system {
+                    Text("All users").font(.caption2.weight(.medium)).padding(.horizontal, 5).padding(.vertical, 1)
+                      .background(Capsule().fill(.quaternary))
+                  }
+                }
+                Text(item.label).font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(item.program).font(.caption2.monospaced()).foregroundStyle(.tertiary)
+                  .lineLimit(1).truncationMode(.middle)
+                if item.isLeftover {
+                  Label("What it runs is gone, so it's left over from a deleted app.", systemImage: "questionmark.folder").font(.caption).foregroundStyle(.secondary)
+                } else if item.warning != nil {
+                  Label(String(localized: "Not an updater. Turning it off can stop \(item.owner) working."), systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
                 }
               }
-              Text(item.label).font(.caption.monospaced()).foregroundStyle(.secondary)
-              Text(item.program).font(.caption2.monospaced()).foregroundStyle(.tertiary)
-                .lineLimit(1).truncationMode(.middle)
-              if let warning = item.warning {
-                Label(warning, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-              }
+            }
+            .toggleStyle(.switch)
+            if item.isLeftover {
+              Button { trashing = item } label: { Image(systemName: "minus.circle") }
+                .buttonStyle(.borderless)
+                .help("Move to Trash")
             }
           }
-          .toggleStyle(.switch)
           .disabled(model.backgroundBusy)
         }
       } header: {
@@ -402,6 +468,15 @@ struct BackgroundView: View {
     }
     .formStyle(.grouped)
     .navigationTitle("Background Items")
+    .confirmationDialog(
+      "Move this leftover background item to the Trash?",
+      isPresented: Binding(get: { trashing != nil }, set: { if !$0 { trashing = nil } }),
+      presenting: trashing
+    ) { item in
+      Button("Move to Trash") { model.trashBackground(item) }
+    } message: { item in
+      Text(String(localized: "\(item.label) runs something that is no longer on this Mac. It goes to the Trash, so you can drag it back to restore it. Items marked All users ask for your password."))
+    }
     .toolbar {
       ToolbarItem {
         Button { model.loadBackground() } label: { Label("Reload", systemImage: "arrow.clockwise") }
@@ -451,14 +526,16 @@ struct StorageView: View {
               .toggleStyle(.checkbox)
               .labelsHidden()
               VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                Text(item.detail).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Text(L(item.title))
+                Text(L(item.detail)).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if let caveat = item.caveat {
-                  Label(caveat, systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
+                  Label(localizedMessage(caveat), systemImage: "info.circle").font(.caption).foregroundStyle(.secondary)
                 }
               }
               Spacer()
-              Text(item.kind == .snapshots ? "\(item.count) snapshot\(item.count == 1 ? "" : "s")" : Term.size(item.bytes))
+              Text(item.kind == .snapshots
+                ? (item.count == 1 ? L("1 snapshot") : String(localized: "\(item.count) snapshots"))
+                : UISize.of(item.bytes))
                 .monospacedDigit().foregroundStyle(.secondary)
             }
             .padding(.vertical, 2)
@@ -473,15 +550,29 @@ struct StorageView: View {
         Section {
           HStack {
             if let message = model.cleanMessage {
-              Text(message).foregroundStyle(.secondary)
+              VStack(alignment: .leading, spacing: 4) {
+                Text(message).foregroundStyle(.secondary)
+                if model.cleanThanks {
+                  Link("Sponsor on GitHub", destination: URL(string: "https://github.com/sponsors/omlahore")!)
+                }
+              }
             } else {
-              Text(model.storageChosen.isEmpty ? "Nothing selected" : "Selected: \(Term.size(model.chosenBytes))").monospacedDigit()
+              Text(model.storageChosen.isEmpty ? "Nothing selected" : "Selected: \(UISize.of(model.chosenBytes))").monospacedDigit()
             }
             Spacer()
             if model.cleaning { ProgressView().controlSize(.small) }
             Button(permanentChosen.isEmpty ? "Move to Trash…" : "Remove…") { confirming = true }
               .buttonStyle(.borderedProminent)
               .disabled(model.storageChosen.isEmpty || model.cleaning)
+          }
+          if model.cleanProtected {
+            HStack {
+              Text("macOS kept some files out of reach. Full Disk Access can let RemoveMacAI move them.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+              Spacer()
+              Button("Open Full Disk Access Settings") { Commands.openFullDiskAccessSettings() }
+            }
           }
         }
       }
@@ -494,8 +585,8 @@ struct StorageView: View {
     ) {
       Button(permanentChosen.isEmpty ? "Move to Trash" : "Remove") { model.clean() }
     } message: {
-      Text("About \(Term.size(model.chosenBytes)). Items only an administrator can move ask for your password."
-        + (permanentChosen.isEmpty ? "" : " \(permanentChosen.joined(separator: " and ")) are deleted right away, not moved to the Trash."))
+      Text(String(localized: "About \(UISize.of(model.chosenBytes)). Items only an administrator can move ask for your password.")
+        + (permanentChosen.isEmpty ? "" : " " + String(localized: "\(permanentChosen.map(L).joined(separator: L(" and "))) are deleted right away, not moved to the Trash.")))
     }
   }
 }
@@ -510,10 +601,10 @@ struct ChangesView: View {
     Form {
       Section("Profile") {
         if model.snapshot.profile.on {
-          LabeledContent("RemoveMacAI profile", value: "Installed")
+          LabeledContent("RemoveMacAI profile", value: L("Installed"))
           if model.currentAI != nil { Label("Apple Intelligence off", systemImage: "apple.intelligence") }
           ForEach(model.snapshot.profile.tweaks.sorted(), id: \.self) { id in
-            Label(Tweaks.tweak(id)?.title ?? id, systemImage: "lock.fill")
+            Label(Tweaks.tweak(id).map { L($0.title) } ?? id, systemImage: "lock.fill")
           }
         } else {
           Text("Not installed.").foregroundStyle(.secondary)
@@ -555,15 +646,15 @@ struct ChangesView: View {
   }
 
   func title(_ id: String) -> String {
-    if let t = Tweaks.tweak(id) { return t.title }
-    if let item = model.background.first(where: { $0.id == id }) { return "Background item: \(item.owner)" }
+    if let t = Tweaks.tweak(id) { return L(t.title) }
+    if let item = model.background.first(where: { $0.id == id }) { return String(localized: "Background item: \(item.owner)") }
     return id
   }
 }
 
 struct Footer: View {
-  let text: String
-  init(_ text: String) { self.text = text }
+  let text: LocalizedStringKey
+  init(_ text: LocalizedStringKey) { self.text = text }
 
   var body: some View {
     Text(text)

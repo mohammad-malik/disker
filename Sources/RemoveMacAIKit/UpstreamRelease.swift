@@ -2,8 +2,8 @@
 
 extension Debloat {
     /// The upstream tag, branch or commit that was vendored.
-    public static let upstreamRef = "v1.2.0-beta.1"
-    public static let upstreamCommit = "dad085044dd353f226be574d5361cc1ca11d09f8"
+    public static let upstreamRef = "v1.2.2"
+    public static let upstreamCommit = "12cef181676e622be65be8cd721993d802395c14"
     /// The upstream commit's date, YYYY-MM-DD.
-    public static let upstreamDate = "2026-10-19"
+    public static let upstreamDate = "2026-11-21"
 }

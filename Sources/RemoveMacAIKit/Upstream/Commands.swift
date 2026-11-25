@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-let version = "1.2.0-beta.1"
+let version = "1.2.2"
 
 enum Commands {
   /// How to undo, as the person ran us: the one-line installer passes its own
@@ -36,6 +36,7 @@ enum Commands {
       print(Term.dim("  macOS removes deleted model files itself, so System Settings can count them for a while."))
     }
     print()
+    warnPendingUpdate()
     if isOff() {
       print(Term.green("Apple Intelligence is off.") + Term.dim(" Undo with: \(undo)"))
     } else {
@@ -54,7 +55,8 @@ enum Commands {
     for set in Catalog.availableModelSets {
       let bytes = Models.bytes(set.name)
       readings[set.name] = bytes
-      print("  " + Term.pad(set.title, 40) + modelSize(bytes))
+      let leftover = bytes == 0 && Models.present(set.name)
+      print("  " + Term.pad(set.title, 40) + (leftover ? Term.yellow("files left in its folder") : modelSize(bytes)))
     }
     let total = Models.total(Catalog.availableModelSets.map(\.name), read: { readings[$0] })
     print("  " + Term.pad("Total", 40) + (total.map { Term.bold(Term.size($0)) } ?? Term.yellow("unknown")))
@@ -94,6 +96,7 @@ enum Commands {
         print(Term.dim("macOS removes deleted model files itself, so System Settings can count them for a while."))
       }
       warnKeptButOff(keep)
+      warnPendingUpdate()
       print(Term.dim("Check it with: removemacai status    Undo with: \(undo)"))
       return true
     }
@@ -177,6 +180,7 @@ enum Commands {
       print(Term.yellow("Incomplete.") + " " + offSummary + " The profile remains installed; model removal is incomplete.")
     }
     warnKeptButOff(keep)
+    warnPendingUpdate()
     print(Term.dim("Check it with: removemacai status    Undo with: \(undo)"))
     return removalComplete
   }
@@ -232,6 +236,13 @@ enum Commands {
     for feature in Catalog.availableFeatures where keep.contains(feature.id) && Settings.state(feature) == .off {
       print(Term.yellow("!") + " \(feature.title) is kept, but it is switched off. Turn it on in System Settings.")
     }
+  }
+
+  static func warnPendingUpdate() {
+    guard let update = PendingUpdate.slowedBy(Profile.installed()) else { return }
+    print(Term.yellow("!") + " \(update) is ready to install. Its download can stop for about 2 hours of awake time while macOS retries the blocked models, then it carries on by itself.")
+    print(Term.dim("  To skip the wait: removemacai on, restart, update, then removemacai off."))
+    print()
   }
 
   /// Injectable operations let self-tests verify failures without contacting the asset service.
@@ -324,7 +335,13 @@ enum Commands {
 
   // MARK: features
 
-  static func features() {
+  static func features(json: Bool) {
+    if json {
+      let rows = Catalog.availableFeatures.map { ["id": $0.id, "title": $0.title] }
+      let data = try! JSONSerialization.data(withJSONObject: rows, options: [.prettyPrinted, .sortedKeys])
+      print(String(decoding: data, as: UTF8.self))
+      return
+    }
     for f in Catalog.availableFeatures { print(Term.pad(f.id, 26) + f.title) }
   }
 
@@ -336,6 +353,12 @@ enum Commands {
       "x-apple.systempreferences:com.apple.preferences.configurationprofiles",
     ] {
       if let u = URL(string: url), NSWorkspace.shared.open(u) { return }
+    }
+  }
+
+  static func openFullDiskAccessSettings() {
+    if let u = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
+      NSWorkspace.shared.open(u)
     }
   }
 

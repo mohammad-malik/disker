@@ -23,6 +23,28 @@ struct BackgroundItem: Identifiable, Hashable {
     [label, (program as NSString).lastPathComponent].contains { $0.lowercased().contains("update") }
   }
 
+  /// Whether what it runs is gone, as when its app was deleted and the agent
+  /// stayed behind. Such an item can't run, so it can go to the Trash. Only a
+  /// path macOS confirms is missing counts, and a command an interpreter runs
+  /// with -c or -e is never judged, so a working item isn't offered.
+  var isLeftover: Bool {
+    var path = program
+    if Self.interpreters.contains((program as NSString).lastPathComponent) {
+      let rest = arguments.dropFirst()
+      let inline = rest.contains { $0.hasPrefix("-") && !$0.hasPrefix("--") && ($0.contains("c") || $0.contains("e")) }
+      guard !inline, let script = rest.first(where: { !$0.hasPrefix("-") }) else { return false }
+      path = script
+    }
+    return Self.confirmedMissing(path)
+  }
+
+  /// True only when macOS says the path doesn't exist, not when it can't look.
+  static func confirmedMissing(_ path: String) -> Bool {
+    guard path.hasPrefix("/") else { return false }
+    var info = stat()
+    return stat(path, &info) != 0 && (errno == ENOENT || errno == ENOTDIR)
+  }
+
   /// What switching it off can break, or nil for an updater.
   var warning: String? {
     isUpdater ? nil : "Not an updater. Turning it off can stop \(owner) working."
@@ -117,7 +139,7 @@ enum BackgroundItems {
       if !disabled { journal.entries[item.id] = nil }
     }
     if !adminCommands.isEmpty {
-      let result = Shell.admin(adminCommands, prompt: "RemoveMacAI needs your password to change background items for all users.")
+      let result = Shell.admin(adminCommands, prompt: String(localized: "RemoveMacAI needs your password to change background items for all users."))
       if !result.ok { problems.append(Shell.adminError(result)) }
     }
     Engine.save(journal)
@@ -126,6 +148,76 @@ enum BackgroundItems {
       problems.append("\(item.label) is still \(disabled ? "on" : "off")")
     }
     return problems
+  }
+
+  /// Stops leftover items and moves their files to the Trash. An item that is
+  /// no longer left over, or that is still loaded after bootout, stays where
+  /// it is. Files another user owns share one administrator prompt; they land
+  /// in the Trash without Finder's Put Back, as in Storage.
+  static func trash(_ items: [BackgroundItem]) -> [String] {
+    var journal = Engine.loadJournal()
+    if let blocked = Engine.journalBlocked { return [blocked] }
+    var problems: [String] = []
+    var adminCommands: [String] = []
+    let trash = Storage.home + "/.Trash"
+    var taken = Set<String>()
+    func trashPath(_ plist: String) -> String {
+      let name = (plist as NSString).lastPathComponent
+      let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+      var candidate = Storage.uniqueName(name, in: trash)
+      var n = 2
+      while taken.contains(candidate) {
+        candidate = Storage.uniqueName(ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)", in: trash)
+        n += 1
+      }
+      taken.insert(candidate)
+      return trash + "/" + candidate
+    }
+    for item in items {
+      // What it runs may have come back since the list was read.
+      guard item.isLeftover else {
+        problems.append("\(item.label) runs something that is on this Mac again, so it stayed")
+        continue
+      }
+      // -n never overwrites; a move that doesn't happen is reported below.
+      let move = "/bin/mv -n \(Shell.quote(item.plist)) \(Shell.quote(trashPath(item.plist)))"
+      if item.system {
+        let target = Shell.quote(item.target)
+        adminCommands.append(
+          "/bin/launchctl bootout \(target) 2>/dev/null; if /bin/launchctl print \(target) >/dev/null 2>&1; then "
+            + "echo \(Shell.quote("\(item.label) couldn't be stopped, so it stayed")) >&2; exit 1; fi; \(move)")
+        continue
+      }
+      Shell.run("/bin/launchctl", ["bootout", item.target])
+      guard !isLoaded(item) else {
+        problems.append("\(item.label) couldn't be stopped, so it stayed")
+        continue
+      }
+      do {
+        try FileManager.default.trashItem(at: URL(fileURLWithPath: item.plist), resultingItemURL: nil)
+      } catch {
+        guard FileManager.default.fileExists(atPath: item.plist) else { continue }
+        adminCommands.append(move)
+      }
+    }
+    if !adminCommands.isEmpty {
+      let result = Shell.admin(adminCommands, prompt: String(localized: "RemoveMacAI needs your password to move background items only an administrator can change."))
+      if !result.ok { problems.append(Shell.adminError(result)) }
+    }
+    for item in items {
+      if !FileManager.default.fileExists(atPath: item.plist) {
+        journal.entries[item.id] = nil
+      } else if item.isLeftover && !problems.contains(where: { $0.hasPrefix(item.label + " ") }) {
+        problems.append("\(item.label) is still in \((item.plist as NSString).deletingLastPathComponent)")
+      }
+    }
+    Engine.save(journal)
+    return problems
+  }
+
+  /// Whether launchd still has the item loaded. Works for the system domain without a password.
+  static func isLoaded(_ item: BackgroundItem) -> Bool {
+    Shell.run("/bin/launchctl", ["print", item.target]).ok
   }
 
   /// Undoes one journal entry, for revert-everything.

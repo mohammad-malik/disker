@@ -136,9 +136,12 @@ enum TweakCommands {
   // MARK: background items
 
   static func background(_ args: [String], yes: Bool) -> Bool {
+    if let action = args.first, action != "off" && action != "on" {
+      Term.fail("unknown action \"\(action)\", use off or on")
+    }
     let items = BackgroundItems.scan()
     let labels = BackgroundItems.disabledLabels()
-    guard let action = args.first, action == "off" || action == "on" else {
+    guard let action = args.first else {
       Commands.header()
       if items.isEmpty {
         print("No background items from other apps.")
@@ -150,7 +153,7 @@ enum TweakCommands {
         let state = off ? Term.dim(Term.pad("off", 5)) : Term.green(Term.pad("on", 5))
         let kind = item.isUpdater ? Term.dim("updater") : Term.yellow("helper")
         print("  " + Term.pad(item.label, 48) + Term.pad(item.owner, 22) + state + kind
-          + (item.system ? Term.dim("  (all users)") : ""))
+          + (item.system ? Term.dim("  (all users)") : "") + (item.isLeftover ? Term.dim("  (left over)") : ""))
       }
       print()
       print(Term.dim("Turning off a helper can stop its app working, for example a VPN or Docker."))
@@ -230,13 +233,21 @@ enum TweakCommands {
     if trashed > 0 { print(Term.green("✓") + " Moved to the Trash. Empty the Trash to free about \(Term.size(trashed)).") }
     if !permanent.isEmpty && result.problems.isEmpty { print(Term.green("✓") + " Deleted " + permanent.map(\.title).joined(separator: " and ") + ".") }
     if result.protected > 0 { print(Term.dim("  \(result.protected) item(s) macOS protects stayed where they were.")) }
+    if result.problems.isEmpty && trashed > 0 {
+      print(Term.dim("I make RemoveMacAI by myself. If it was useful, you can sponsor it: https://github.com/sponsors/omlahore"))
+    }
     return result.problems.isEmpty
   }
 
   // MARK: export
 
   /// Writes the profile for a preset or named tweaks, for deploying with an MDM.
-  static func export(path: String, ids: [String], preset: Preset?, keepAI: Set<String>, noAI: Bool) {
+  /// `device` writes an iPhone or iPad profile that only turns Apple Intelligence off.
+  static func export(path: String, ids: [String], preset: Preset?, keepAI: Set<String>, noAI: Bool, device: Mobile.Device? = nil) {
+    if let device {
+      exportMobile(path: path, device: device, ids: ids, preset: preset, keepAI: keepAI, noAI: noAI)
+      return
+    }
     var tweaks = Set<String>()
     for id in ids {
       guard let t = Tweaks.tweak(id) else { Term.fail("there is no tweak called \"\(id)\"") }
@@ -252,5 +263,38 @@ enum TweakCommands {
     print(Term.dim("  Apple Intelligence: \(noAI ? "left alone" : keepAI.isEmpty ? "off" : "off except \(keepAI.sorted().joined(separator: ", "))")"))
     print(Term.dim("  Tweaks: \(tweaks.isEmpty ? "none" : tweaks.sorted().joined(separator: ", "))"))
     print(Term.dim("  Per-user tweaks (Finder, Dock, typing) aren't in profiles; run removemacai on each Mac for those."))
+  }
+
+  /// An iPhone or iPad profile. Tweaks and model deletion are Mac-only.
+  private static func exportMobile(path: String, device: Mobile.Device, ids: [String], preset: Preset?, keepAI: Set<String>, noAI: Bool) {
+    if !ids.isEmpty || preset != nil {
+      Term.fail("an \(device.rawValue) profile only turns Apple Intelligence off. Leave out tweak names and --preset")
+    }
+    if noAI { Term.fail("--no-ai leaves Apple Intelligence alone, so an \(device.rawValue) profile would be empty") }
+    let names = Mobile.features(for: device).map(\.id).joined(separator: ", ")
+    for id in keepAI.sorted() {
+      guard Mobile.feature(id) != nil else {
+        Term.fail("there is no \(device.rawValue) feature called \"\(id)\". Names: \(names)")
+      }
+    }
+    let off = Mobile.features(for: device).filter { !keepAI.contains($0.id) }
+    guard !off.isEmpty else { Term.fail("nothing would be turned off. Leave a feature out of --keep") }
+    do {
+      try Mobile.data(keeping: keepAI, device: device).write(to: URL(fileURLWithPath: path))
+    } catch { Term.fail("could not write \(path): \(error)") }
+    print(Term.green("✓") + " Wrote \(path) for \(device.rawValue) (\(device.systemName))")
+    print(Term.dim("  Off: \(off.map(\.title).joined(separator: ", "))"))
+    if !keepAI.isEmpty { print(Term.dim("  Kept on: \(keepAI.sorted().joined(separator: ", "))")) }
+    let supervised = off.filter(\.supervised).map(\.title)
+    if !supervised.isEmpty {
+      print(Term.dim("  A supervised \(device.rawValue) honors: \(supervised.joined(separator: ", ")). An unsupervised one ignores those."))
+    }
+    print(Term.dim("  Siri applies without supervision. Siri AI and ChatGPT extensions do too, except Shared iPad ignores them."))
+    if off.contains(where: { $0.id == "mail" }) {
+      print(Term.dim("  Mail summaries turn off the ones you start yourself. Mail can still write them on its own."))
+    }
+    print(Term.dim("  \(device.systemName) keeps the model files. Removing the profile turns the switches back on."))
+    print(Term.dim("  Shared iPad ignores the supervised switches."))
+    print(Term.dim("  Install it from Settings > General > VPN & Device Management."))
   }
 }
