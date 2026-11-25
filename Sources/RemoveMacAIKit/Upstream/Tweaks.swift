@@ -205,12 +205,12 @@ enum Tweaks {
     Tweak(
       id: "media-keys", group: .annoyances, title: "Turn off the play, pause and skip keys",
       detail: "Turns off the service behind the media keys, so the play key can't open Music.",
-      caveat: "The keys stop working in every app, including VLC and Spotify. To keep them and only stop Music opening, use Block Music launches instead.",
+      caveat: "The keys stop working in every app, including VLC and Spotify. To keep them and only stop Music opening, use Stop Music from opening instead.",
       changes: [.service("com.apple.rcd")]),
     Tweak(
-      id: "music-launches", group: .annoyances, title: "Block Music launches, including from AirPods",
+      id: "music-launches", group: .annoyances, title: "Stop Music from opening, even by hand",
       detail: "Disables Music's application launch entry, so an AirPod press no longer opens it. No background helper or configuration profile is installed.",
-      caveat: "Closes Music and blocks manual launches too. Reapply after a macOS update replaces Music's files.",
+      caveat: "Music won't open at all, not even when you click it, until you undo this. Reapply after a macOS update replaces Music's files.",
       changes: [.musicLaunches]),
     Tweak(
       id: "iphone-mirroring", group: .annoyances, title: "Turn off iPhone Mirroring",

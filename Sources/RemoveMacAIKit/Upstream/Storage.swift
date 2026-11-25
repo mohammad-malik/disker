@@ -241,7 +241,7 @@ enum Storage {
       }
     }
     if !adminCommands.isEmpty {
-      let run = Shell.admin(adminCommands, prompt: "RemoveMacAI needs your password to move items only an administrator can change.")
+      let run = Shell.admin(adminCommands, prompt: String(localized: "RemoveMacAI needs your password to move items only an administrator can change."))
       if !run.ok { result.problems.append(Shell.adminError(run)) }
     }
     return result
